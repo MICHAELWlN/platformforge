@@ -232,6 +232,34 @@ orders-service now also maps statuses synthesized by its own sidecar:
 - 403 (`RBAC: access denied`) → 502 `inventory_forbidden`.
 - Other non-200 statuses, such as an injected 500, → 502 `inventory_bad_status`.
 
+## Milestone 4: implemented (observability, local kind)
+
+```
+pf-test-client-mesh
+        |  mTLS + W3C traceparent
+        v
+orders-service sidecar  --->  OTLP/gRPC :4317  Tempo
+        |                              ^
+        v                              | OTLP/HTTP :4318
+orders-service (FastAPI spans) --------+
+        |  mTLS + traceparent
+        v
+inventory-service sidecar + FastAPI spans
+        |
+        +--> sidecar :15020 /stats/prometheus --> Prometheus --> Grafana
+        +--> stdout JSON (request_id, trace_id, span_id) --> Alloy --> Loki --> Grafana
+```
+
+The telemetry namespace is `platformforge-observability`. It is not injected into the
+mesh. Application traffic still enters only through `platformforge-dev`, where
+PeerAuthentication remains STRICT and the inventory AuthorizationPolicy is unchanged.
+
+Prometheus discovery is limited to that namespace by a RoleBinding onto a ClusterRole
+that can list pods, services, endpoints, and endpointslices. Alloy's Role in the same
+namespace can read `pods` and `pods/log`. Loki, Tempo, and Grafana have no Kubernetes
+API permissions. Details, chart versions, and the emptyDir consequence are in
+[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+
 ## Target architecture: not yet implemented
 
 The following are planned and **do not exist in the repository yet**:
@@ -239,7 +267,6 @@ The following are planned and **do not exist in the repository yet**:
 - Terraform-managed GCP: VPC, GKE (private nodes, Workload Identity), Artifact Registry
 - GKE workload deployment through the same CLI
 - Istio on GKE (the mesh exists only on local kind; see Milestone 3)
-- OpenTelemetry instrumentation; Prometheus, Loki, Tempo, Grafana
 - CD (image publishing and deployment from CI)
 - Read-only MCP server for Kubernetes diagnostics
-- Controlled incident simulation, AI-assisted investigation, rollback
+- Metric-based canary promotion or automated rollback (the signals exist; the controller does not)

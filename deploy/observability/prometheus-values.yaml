@@ -1,0 +1,82 @@
+# prometheus-community/prometheus 29.37.0 (Prometheus v3.15.0)
+# Pinned chart. Single replica, emptyDir, short retention. No alertmanager, node-exporter,
+# kube-state-metrics, or pushgateway.
+# The chart's default ClusterRole can list nodes, ingresses, and configmaps in every
+# namespace. Discovery is limited to platformforge-dev via a RoleBinding onto the
+# narrower ClusterRole in prometheus-rbac.yaml (namespaced resources only).
+rbac:
+  create: true
+
+alertmanager:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+server:
+  replicaCount: 1
+  namespaces:
+    - platformforge-dev
+  useExistingClusterRoleName: platformforge-prometheus
+  retention: 6h
+  retentionSize: 512MB
+  persistentVolume:
+    enabled: false
+  emptyDir:
+    sizeLimit: 1Gi
+  global:
+    scrape_interval: 15s
+    scrape_timeout: 10s
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    seccompProfile:
+      type: RuntimeDefault
+  service:
+    type: ClusterIP
+    servicePort: 80
+
+# Default jobs that scrape the API server, nodes, and every namespace are off.
+# kubernetes-pods keeps only platformforge-dev pods annotated by Istio, and only the
+# istio-proxy container (native sidecar). Metrics are served on port 15020.
+scrapeConfigs:
+  prometheus:
+    enabled: true
+  kubernetes-api-servers:
+    enabled: false
+  kubernetes-nodes:
+    enabled: false
+  kubernetes-nodes-cadvisor:
+    enabled: false
+  kubernetes-service-endpoints:
+    enabled: false
+  kubernetes-service-endpoints-slow:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+  kubernetes-services:
+    enabled: false
+  kubernetes-pods-slow:
+    enabled: false
+  kubernetes-pods:
+    enabled: true
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - platformforge-dev
+    post_relabel_configs: |
+      - source_labels: [__meta_kubernetes_pod_container_name]
+        action: keep
+        regex: istio-proxy

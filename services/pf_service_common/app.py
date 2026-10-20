@@ -10,10 +10,12 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 from pydantic import BaseModel
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from pf_service_common.requestid import REQUEST_ID_HEADER, accept_or_generate, request_id_var
+from pf_service_common.telemetry import configure_telemetry
 
 access_log = logging.getLogger("pf.access")
 
@@ -39,6 +41,9 @@ class RequestContextMiddleware:
                 break
         request_id = accept_or_generate(inbound)
         token = request_id_var.set(request_id)
+        span = trace.get_current_span()
+        if span.is_recording():
+            span.set_attribute("platformforge.request_id", request_id)
         status = 500
         start = time.perf_counter()
 
@@ -116,6 +121,9 @@ def create_service_app(service: str, lifespan: Lifespan | None = None) -> FastAP
     )
     app.state.ready = False
     app.add_middleware(RequestContextMiddleware)
+    # Added after the request-ID middleware, so the OpenTelemetry middleware runs first
+    # and a span is already current when the request ID is attached to it.
+    app.state.tracer_provider = configure_telemetry(app, service)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

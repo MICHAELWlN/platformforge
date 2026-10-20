@@ -36,11 +36,20 @@ spec:
         "upstream_host": "%UPSTREAM_HOST%",
         "upstream_peer_uri_san": "%UPSTREAM_PEER_URI_SAN%",
         "upstream_tls_version": "%UPSTREAM_TLS_VERSION%",
-        "upstream_transport_failure_reason": "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+        "upstream_transport_failure_reason": "%UPSTREAM_TRANSPORT_FAILURE_REASON%",
+        "trace_id": "%TRACE_ID%"
       }
-    # Tracing is a later milestone; disabling it also stops Envoy from rewriting
-    # application-generated X-Request-ID values.
-    enableTracing: false
+    # OpenTelemetry tracing. Sampling is NOT mesh-wide: the Telemetry resource in
+    # platformforge-dev selects this provider. `defaultConfig.tracing: {}` disables the
+    # legacy built-in tracer so Envoy does not also try to reach a Zipkin endpoint.
+    enableTracing: true
+    defaultConfig:
+      tracing: {}
+    extensionProviders:
+      - name: otel-tracing
+        opentelemetry:
+          service: tempo.platformforge-observability.svc.cluster.local
+          port: 4317
   components:
     # Istio CNI replaces the privileged istio-init container, which is what lets meshed pods
     # pass the `restricted` Pod Security level enforced on platformforge-dev.

@@ -1,0 +1,100 @@
+{
+  "uid": "platformforge-overview",
+  "title": "PlatformForge services",
+  "tags": ["platformforge", "istio"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": {"from": "now-15m", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request rate by destination and version",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (destination_canonical_service, destination_version) (rate(istio_requests_total{reporter=\"source\",destination_service_namespace=\"platformforge-dev\"}[2m]))",
+          "legendFormat": "{{destination_canonical_service}} {{destination_version}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Error rate (5xx) by destination and version",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (destination_canonical_service, destination_version) (rate(istio_requests_total{reporter=\"source\",destination_service_namespace=\"platformforge-dev\",response_code=~\"5..\"}[2m])) / sum by (destination_canonical_service, destination_version) (rate(istio_requests_total{reporter=\"source\",destination_service_namespace=\"platformforge-dev\"}[2m]))",
+          "legendFormat": "{{destination_canonical_service}} {{destination_version}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Request latency p95",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, destination_canonical_service, destination_version) (rate(istio_request_duration_milliseconds_bucket{reporter=\"source\",destination_service_namespace=\"platformforge-dev\"}[2m])))",
+          "legendFormat": "{{destination_canonical_service}} {{destination_version}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Inventory canary split by destination version",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (destination_version) (rate(istio_requests_total{reporter=\"source\",destination_service_name=\"inventory-service\"}[2m]))",
+          "legendFormat": "{{destination_version}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Service health (successful requests / all)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (destination_canonical_service) (rate(istio_requests_total{reporter=\"destination\",destination_service_namespace=\"platformforge-dev\",response_code=~\"2..\"}[2m])) / sum by (destination_canonical_service) (rate(istio_requests_total{reporter=\"destination\",destination_service_namespace=\"platformforge-dev\"}[2m]))",
+          "legendFormat": "{{destination_canonical_service}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Sidecar scrape targets up",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(up{job=\"kubernetes-pods\",namespace=\"platformforge-dev\"})",
+          "legendFormat": "up"
+        }
+      ]
+    }
+  ]
+}

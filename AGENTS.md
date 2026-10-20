@@ -38,7 +38,7 @@ src/platformforge/
   deployer.py     Create/replace with ownership checks, rollout wait, status, logs
   cli.py          Typer CLI: validate, deploy, status, logs
 services/
-  pf_service_common/  Shared: JSON logging, request-ID middleware, health/version endpoints
+  pf_service_common/  Shared: JSON logging, request-ID middleware, health/version endpoints, OTel traces
   inventory_service/  FastAPI inventory-service
   orders_service/     FastAPI orders-service (calls inventory-service)
   manifests/          PlatformForge ServiceManifests (inventory v0.1.0 stable, v0.2.0 canary, orders)
@@ -47,15 +47,18 @@ services/
   requirements.txt    Exact runtime pins for the images
 deploy/istio/     istioctl install config + istio-system namespace (PSA privileged for CNI)
 deploy/istio/platformforge-dev/  Reviewed mesh policy: PeerAuthentication, AuthorizationPolicy,
-                  DestinationRule, VirtualService (stable 100/0, canary 90/10)
-docs/             ISTIO.md, CANARY_RELEASE.md, INCIDENT_RUNBOOK.md
+                  DestinationRule, VirtualService (stable 100/0, canary 90/10), Telemetry tracing
+deploy/observability/  Helm values for Prometheus, Grafana, Loki, Tempo, Alloy; namespace;
+                  Tempo NetworkPolicy; Prometheus ClusterRole; Grafana dashboard
+docs/             ISTIO.md, CANARY_RELEASE.md, INCIDENT_RUNBOOK.md, OBSERVABILITY.md,
+                  TRACING.md, OBSERVABILITY_RUNBOOK.md
 examples/         Example ServiceManifest(s)
 tests/unit/       Fast tests; Kubernetes API is mocked
 tests/services/   Service unit tests (FastAPI TestClient, httpx MockTransport)
 tests/integration Opt-in tests against a local kind cluster (mesh.py: in-cluster client
                   pods, Envoy admin/metrics/log helpers, allowlisted mesh-file apply)
 .github/workflows CI: ruff, unit tests, image builds (no secrets, no cluster)
-.tools/           gitignored; istioctl 1.31.2 at .tools/istio-1.31.2/bin/istioctl
+.tools/           gitignored; istioctl 1.31.2 at .tools/istio-1.31.2/bin/istioctl; helm 3.22.1 at .tools/helm
 ```
 
 ## Commands
@@ -109,3 +112,23 @@ Service dependency pins live in two places and must match: `services/requirement
   (`mesh.wait_for_weights`) before measuring traffic.
 - Call services by name, never by pod IP. A sidecar sends pod-IP traffic through
   `PassthroughCluster` without mTLS, and STRICT rejects it.
+
+### Observability (Milestone 4)
+
+- The telemetry stack lives in `platformforge-observability` with `istio-injection=disabled`.
+  Do not inject that namespace: Prometheus scrapes sidecar port 15020 by pod IP, and
+  Tempo/Loki are plaintext. A sidecar would send that through `PassthroughCluster`.
+- Do not weaken STRICT or the inventory AuthorizationPolicy to make telemetry work.
+- Do not expose Prometheus, Grafana, Loki, Tempo, or Alloy (no NodePort, LoadBalancer,
+  Ingress, or external IP). Port-forward is a local debugging step, not a manifest change.
+- Prometheus RBAC is ClusterRole `platformforge-prometheus` bound only in
+  `platformforge-dev`. Do not restore the chart's cluster-wide ClusterRole.
+- Alloy may read `pods` and `pods/log` in `platformforge-dev` only. No hostPath.
+- Application spans must not record bodies, headers, or credentials. Export only when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and a failed export must not fail the request.
+- Istio sampling for this lab is the Telemetry object in `platformforge-dev`, not a
+  mesh-wide policy in `istio-system`. `useRequestIdForTraceSampling` stays false so
+  caller-supplied request IDs are still traced.
+- Telemetry disks are emptyDir. Do not add a PersistentVolume for this local lab without
+  an explicit request.
+- Grafana's admin password is the chart-generated Secret. Do not write it into values or git.

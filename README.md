@@ -158,8 +158,9 @@ platformforge deploy services/manifests/orders-service.yaml
 platformforge status services/manifests/orders-service.yaml
 ```
 
-The `inventory-service:0.1.0` image used in the recorded runs was built during Milestone 2.
-Rebuilding it from the current source adds only the failure knob, which is off by default.
+The `inventory-service:0.1.0` image is built from the current source. It includes the
+failure knob (off by default) and the OpenTelemetry exporter. Rebuild and reload it
+after tracing changes; the stable Deployment serves 100% of inventory traffic.
 
 ## Service mesh (Istio, local kind)
 
@@ -178,6 +179,18 @@ CNI plugin, so `platformforge-dev` keeps the `restricted` Pod Security level. In
 Install commands, configuration files, and verification: [docs/ISTIO.md](docs/ISTIO.md).
 Release and rollback procedure: [docs/CANARY_RELEASE.md](docs/CANARY_RELEASE.md). Failure
 drill: [docs/INCIDENT_RUNBOOK.md](docs/INCIDENT_RUNBOOK.md).
+
+## Observability (local kind)
+
+Prometheus, Grafana, Loki, Tempo, and Alloy run in `platformforge-observability`
+(ClusterIP only, no Istio sidecar). Prometheus scrapes Istio sidecar metrics on port
+15020. Both FastAPI services export OTLP/HTTP traces to Tempo and write `trace_id` and
+`span_id` next to the request ID. Alloy tails `platformforge-dev` pod logs into Loki.
+Grafana is provisioned with those three datasources and a service dashboard.
+
+Install, versions, and the emptyDir caveat: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+Trace shape: [docs/TRACING.md](docs/TRACING.md). Investigation and cleanup:
+[docs/OBSERVABILITY_RUNBOOK.md](docs/OBSERVABILITY_RUNBOOK.md).
 
 Istio objects are applied with `kubectl` from `deploy/istio/`. PlatformForge manifests cannot
 contain them.
@@ -206,6 +219,9 @@ make integration                         # = PLATFORMFORGE_IT_CONTEXT=kind-platf
 - `tests/integration/test_services_mesh.py` verifies Istio Phases A–F in order. It applies only
   the reviewed files under `deploy/istio/platformforge-dev/`, runs the canary and failure
   drill, and leaves the stable configuration (100% v0.1.0) in place.
+- `tests/integration/test_observability.py` checks Prometheus scrapes, a real metric
+  increase, Loki, Tempo, trace parentage, Grafana datasource health, and the canary
+  drill through Prometheus. It restores stable routing and the healthy canary.
 - The tests create two client pods in `platformforge-dev`, `pf-test-client-mesh` (sidecar,
   `default` identity) and `pf-test-client-plain` (no sidecar), and reuse them. The tests
   never delete them.
@@ -232,6 +248,9 @@ Removing Istio itself is described in [docs/ISTIO.md](docs/ISTIO.md#cleanup-manu
 - [docs/ISTIO.md](docs/ISTIO.md): mesh installation, configuration, verification, cleanup
 - [docs/CANARY_RELEASE.md](docs/CANARY_RELEASE.md): canary procedure and measured split
 - [docs/INCIDENT_RUNBOOK.md](docs/INCIDENT_RUNBOOK.md): canary failure drill and remediation
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): telemetry install, versions, resources
+- [docs/TRACING.md](docs/TRACING.md): W3C propagation and what spans record
+- [docs/OBSERVABILITY_RUNBOOK.md](docs/OBSERVABILITY_RUNBOOK.md): drill investigation and cleanup
 - [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md): what is and is not implemented
 - [TEST_EVIDENCE.md](TEST_EVIDENCE.md): commands run and their results
 - [AGENTS.md](AGENTS.md): rules for AI coding agents working in this repository

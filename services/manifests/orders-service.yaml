@@ -18,6 +18,17 @@ spec:
       value: http://inventory-service.platformforge-dev.svc.cluster.local:8080
     - name: INVENTORY_TIMEOUT_SECONDS
       value: "2"
+    # OTLP/HTTP to Tempo. No credentials; spans carry the request ID, not bodies or headers.
+    - name: OTEL_SERVICE_NAME
+      value: orders-service
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://tempo.platformforge-observability.svc.cluster.local:4318
+    - name: OTEL_EXPORTER_OTLP_PROTOCOL
+      value: http/protobuf
+    - name: OTEL_TRACES_SAMPLER
+      value: parentbased_always_on
+    - name: OTEL_BSP_SCHEDULE_DELAY
+      value: "1000"
   resources:
     requests:
       cpu: 50m

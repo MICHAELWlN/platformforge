@@ -1,0 +1,24 @@
+# Tempo's chart always merges its default Jaeger receivers back in. This policy drops
+# them: only the query API and the two OTLP ports accept traffic. ClusterIP already
+# keeps the service off the node network; this is the in-cluster restriction.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tempo-otlp-only
+  namespace: platformforge-observability
+  labels:
+    app.kubernetes.io/part-of: platformforge
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 3200
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318

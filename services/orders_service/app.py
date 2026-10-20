@@ -10,6 +10,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, HTTPException, Path, Request
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from pydantic import BaseModel, ValidationError
 
 from orders_service import SERVICE_NAME
@@ -56,6 +57,11 @@ def create_app(
             transport=transport,
             follow_redirects=False,
         ) as client:
+            # Injects W3C traceparent/tracestate from the current server span. The request
+            # ID is set per call below. Bodies and headers are not copied onto the span.
+            HTTPXClientInstrumentor().instrument_client(
+                client, tracer_provider=app.state.tracer_provider
+            )
             app.state.inventory = client
             log.info(
                 "orders-service started",

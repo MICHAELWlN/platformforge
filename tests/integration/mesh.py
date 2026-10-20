@@ -54,6 +54,7 @@ MESH_KINDS = {
     "AuthorizationPolicy": ("security.istio.io", "v1", "authorizationpolicies"),
     "DestinationRule": ("networking.istio.io", "v1", "destinationrules"),
     "VirtualService": ("networking.istio.io", "v1", "virtualservices"),
+    "Telemetry": ("telemetry.istio.io", "v1", "telemetries"),
 }
 MESH_FILES = {
     "peer-authentication.yaml",
@@ -61,6 +62,7 @@ MESH_FILES = {
     "inventory-destinationrule.yaml",
     "inventory-virtualservice-stable.yaml",
     "inventory-virtualservice-canary.yaml",
+    "telemetry-tracing.yaml",
 }
 
 # Runs inside the target container. argv[1] is a JSON spec; prints one JSON document.
@@ -98,7 +100,7 @@ for i in range(spec["count"]):
         r["error"] = type(e).__name__ + ": " + str(e)
     r["headers"] = {k.lower(): v for k, v in dict(headers).items() if k.lower() in keep}
     if spec["bodies"]:
-        r["body"] = body.decode("utf-8", "replace")[:2000]
+        r["body"] = body.decode("utf-8", "replace")[: spec.get("body_limit", 2000)]
     results.append(r)
 print(json.dumps(results))
 """
@@ -215,6 +217,7 @@ def http(
     rid_prefix: str = "it",
     timeout: float = 5,
     bodies: bool = True,
+    body_limit: int = 2000,
     keep_headers: tuple[str, ...] = ("x-request-id", "server", "x-envoy-upstream-service-time"),
 ) -> list[dict]:
     spec = {
@@ -225,6 +228,7 @@ def http(
         "rid_prefix": rid_prefix,
         "timeout": timeout,
         "bodies": bodies,
+        "body_limit": body_limit,
         "keep_headers": list(keep_headers),
     }
     out = _exec(kube, pod, container, [PYTHON, "-c", _CLIENT_SCRIPT, json.dumps(spec)])

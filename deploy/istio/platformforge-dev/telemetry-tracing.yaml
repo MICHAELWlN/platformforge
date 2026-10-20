@@ -1,0 +1,19 @@
+# Namespace-scoped tracing for platformforge-dev. The provider is declared in
+# deploy/istio/istio-operator.yaml. 100% sampling is a local-lab choice so every
+# drill request is explainable; it is not a production sampling rate.
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: tracing
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/part-of: platformforge
+spec:
+  tracing:
+    - providers:
+        - name: otel-tracing
+      randomSamplingPercentage: 100
+      # Envoy otherwise hashes x-request-id and drops the trace unless that header
+      # is a UUID. PlatformForge request IDs are caller-supplied, so sampling has
+      # to follow randomSamplingPercentage on its own.
+      useRequestIdForTraceSampling: false

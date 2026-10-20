@@ -7,6 +7,8 @@ import logging
 import sys
 from datetime import UTC, datetime
 
+from opentelemetry import trace
+
 from pf_service_common.requestid import request_id_var
 
 LOG_LEVELS = ("debug", "info", "warning", "error")
@@ -28,6 +30,14 @@ def install_request_id_record_factory() -> None:
     def factory(*args, **kwargs):
         record = previous(*args, **kwargs)
         record.request_id = request_id_var.get()
+        # Stamp the span that is current at creation time, same reason as the request ID.
+        context = trace.get_current_span().get_span_context()
+        if context.is_valid:
+            record.trace_id = format(context.trace_id, "032x")
+            record.span_id = format(context.span_id, "016x")
+        else:
+            record.trace_id = None
+            record.span_id = None
         return record
 
     logging.setLogRecordFactory(factory)
@@ -50,6 +60,11 @@ class JsonFormatter(logging.Formatter):
         request_id = getattr(record, "request_id", None)
         if request_id:
             payload["request_id"] = request_id
+        trace_id = getattr(record, "trace_id", None)
+        span_id = getattr(record, "span_id", None)
+        if trace_id and span_id:
+            payload["trace_id"] = trace_id
+            payload["span_id"] = span_id
         fields = getattr(record, "fields", None)
         if isinstance(fields, dict):
             payload.update(fields)

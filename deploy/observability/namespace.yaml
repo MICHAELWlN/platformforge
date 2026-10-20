@@ -1,0 +1,14 @@
+# Observability stack namespace. Istio injection is explicitly off: Prometheus scrapes
+# sidecar metrics on pod IPs, and Tempo/Loki are plaintext OTLP/HTTP endpoints. A sidecar
+# here would send that traffic through PassthroughCluster and STRICT would reject it.
+# baseline (not restricted) because the upstream charts do not all meet the restricted
+# Pod Security profile. hostPath and privileged remain forbidden.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platformforge-observability
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    istio-injection: disabled
+    app.kubernetes.io/part-of: platformforge

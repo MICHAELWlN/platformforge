@@ -736,6 +736,66 @@ destinationrule/inventory-service; virtualservice/inventory-service v0-1-0=100 v
 namespaces with istio-injection=enabled: platformforge-dev only
 ```
 
+# Milestone 4: observability
+
+Date: 2026-10-20. Context: `kind-platformforge`. No cluster was recreated. Docker memory
+was not increased.
+
+## M4.1 Capacity and install
+
+Before the stack, the kind node was using about 1.9 GiB of 7.748 GiB and allocated
+requests were 1630m CPU / 1570Mi memory. After install, `kubectl describe node` reported
+requests 1860m CPU (15%) and 2562Mi memory (32%), limits 9350m CPU (77%) and 6420Mi
+memory (80%). `docker stats` showed `platformforge-control-plane` at 3.792 GiB / 7.748 GiB.
+
+`helm list -n platformforge-observability`:
+
+| Release | Chart | App |
+| --- | --- | --- |
+| prometheus | prometheus-29.37.0 | v3.15.0 |
+| grafana | grafana-14.0.1 | 13.2.4 |
+| loki | loki-18.17.1 | 3.7.8 |
+| tempo | tempo-3.2.0 | 3.1.0 |
+| alloy | alloy-1.14.0 | v1.21.0 |
+
+All five pods were Ready. Alloy's first install crash-looped with `mkdir /tmp/alloy: read-only file system`. Revision 2 mounts an emptyDir there. Grafana, Loki, Tempo, and Prometheus came up on the first install.
+
+From `pf-test-client-plain`, TCP to `tempo` ports 9411 and 14268 timed out. Ports 4318 and 3200 connected. VirtualService `inventory-service` was left at v0-1-0 weight 100, v0-2-0 weight 0.
+
+## M4.2 Metrics, logs, traces, Grafana
+
+Prometheus active targets included orders-service and both inventory Deployments, scrape URL `http://<pod ip>:15020/stats/prometheus`, health `up`. A query of `istio_requests_total` returned source `orders-service` to destination workload `inventory-service-v0-1-0`, `destination_version=v0.1.0`, `response_code=200`, and orders-service as a destination (`destination_version=unknown`, because that manifest sets no `spec.version`).
+
+Grafana `/api/health` returned database ok, version 13.2.4. Datasource health for Prometheus, Loki, and Tempo returned status OK. The dashboard **PlatformForge services** rendered in a browser at `http://127.0.0.1:3000/d/platformforge-overview` with request-rate series for inventory `v0.1.0` / `v0.2.0` and orders, and the sidecar-target stat showing 8.
+
+`pytest tests/integration/test_observability.py -s` on 2026-10-20:
+
+```
+trace: request_id=obs-trace-31028d8d76aa trace_id=20f98e2b62278403629b59cfd4da5f07 orders_ts=2026-10-20T22:39:11.544+00:00 inventory_ts=2026-10-20T22:39:11.543+00:00
+drill: client_502=1 client_200=39 prom_v0.2.0_5xx 54.0->55.0 prom_v0.1.0_5xx 0->0
+recovery: prom_v0.2.0_5xx stayed 55.0 -> 55.0
+5 passed in 92.80s
+```
+
+The 54 already counted an earlier drill in the same Prometheus process. This sample added one inventory `v0.2.0` 5xx and no `v0.1.0` 5xx. After the VirtualService returned to stable and 20 further requests returned HTTP 200, the `v0.2.0` 5xx counter stayed at 55. The test then redeployed the healthy canary.
+
+## M4.3 Complete suite
+
+`PLATFORMFORGE_IT_CONTEXT=kind-platformforge .venv/bin/pytest -q` on the final tree:
+
+```
+352 passed, 1 warning in 170.00s
+```
+
+An earlier run of the same command, before the observability test printed the drill line above, was `352 passed, 1 warning in 153.19s`. Both are 292 unit tests and 60 integration tests (`pytest --collect-only -m integration` collected 60/352). The warning is the pre-existing Starlette `httpx` TestClient deprecation. No test was skipped. `ruff check` and `ruff format --check` on `src`, `services`, and `tests` passed.
+
+## What Milestone 4 evidence does not show
+
+- Retention across a pod restart. The stores are emptyDir.
+- A production sampling rate. This lab samples 100% of `platformforge-dev`.
+- Authentication on Prometheus, Loki, or Tempo.
+- GKE, Terraform, or any billable cloud resource.
+
 ## What Milestone 3 evidence does not show
 
 - Anything on GKE, multi-node, or multi-cluster; only a single-node kind cluster.

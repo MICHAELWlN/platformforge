@@ -1,0 +1,34 @@
+# grafana-community/tempo 3.2.0 (Tempo 3.1.0)
+# Single binary, local storage on the chart's emptyDir (persistence disabled), 6h retention.
+# OTLP is what Istio and the applications use. The chart's Jaeger receivers are removed
+# by the NetworkPolicy in tempo-networkpolicy.yaml, which admits only 3200/4317/4318.
+tempo:
+  reportingEnabled: false
+  retention: 6h
+  multitenancyEnabled: false
+  metricsGenerator:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+replicas: 1
+persistence:
+  enabled: false
+service:
+  type: ClusterIP
+serviceMonitor:
+  enabled: false

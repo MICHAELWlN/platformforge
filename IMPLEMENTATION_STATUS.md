@@ -159,18 +159,47 @@ Istio 1.31.2 on the existing `kind-platformforge` cluster (Kubernetes v1.37.0). 
 - The `kubectl` API-server proxy to meshed services no longer works under STRICT. Tests use
   in-cluster client pods instead (`pf-test-client-mesh`, `pf-test-client-plain`). The tests
   create and reuse these pods and never delete them.
-- No observability stack yet. Evidence comes from Envoy admin endpoints and access logs.
+- Milestone 3 evidence was collected from Envoy admin endpoints and access logs.
+  Milestone 4 adds Prometheus, Loki, and Tempo; those checks are below.
 - Removing an old Deployment after a rename (`inventory-service` → `inventory-service-v0-1-0`)
   is a manual, approval-gated step. The CLI only warns about the overlap.
+
+## Milestone 4: observability (local kind only)
+
+| Phase | Scope | Status | Evidence |
+| --- | --- | --- | --- |
+| A | Capacity | Fits in the current Docker VM | requests 1860m / 2562Mi after install; node at 3.792 GiB / 7.748 GiB |
+| B | Prometheus, Grafana, Loki, Tempo, Alloy | Healthy, ClusterIP | helm list; all pods Ready |
+| C | Istio metrics for both services | Verified | scrape targets up; `istio_requests_total` increases |
+| D | OTel traces, both services, parent span | Verified | Tempo trace `20f98e2b62278403629b59cfd4da5f07` |
+| E | Loki logs with request and trace IDs | Verified | orders `2026-10-20T22:39:11.544+00:00`, inventory `...11.543+00:00` |
+| F | Grafana datasources and dashboard | Verified | datasource health OK; UI showed request rate and 8 targets |
+| G | Canary drill through Prometheus | Verified | 39x 200 and 1x 502; v0.2.0 5xx 54→55; held at 55 after rollback |
+| H | Regression | Verified | 352 passed (292 unit + 60 integration) in 170.00s; none skipped |
+| I | Documentation | Written | docs/OBSERVABILITY.md, TRACING.md, OBSERVABILITY_RUNBOOK.md |
+
+### Known limitations of Milestone 4
+
+- Telemetry stores are emptyDir. A restart drops metrics, logs, and traces.
+- Prometheus, Loki, and Tempo have no authentication. Grafana allows anonymous viewers
+  on ClusterIP. The admin password is a generated Secret and is not in git.
+- Sampling in `platformforge-dev` is 100%.
+- orders-service `destination_version` is `unknown` because the manifest sets no
+  `spec.version`. Inventory versions are labeled.
+- Tempo's Service still lists Jaeger ports. NetworkPolicy drops them; that was observed
+  as timeouts to 9411 and 14268 from the plaintext test client.
+- No metric-based promotion or automated rollback. The drill is still a manual manifest
+  change, now visible in Prometheus.
+- Not run on GKE. No Terraform.
 
 ## Later milestones
 
 | Area | Status |
 | --- | --- |
-| Terraform (GCP network, GKE, Artifact Registry) | Not started |
-| GKE workload deployment | Not started |
+| Terraform (GCP network, GKE, Artifact Registry) | Not started. Do not start without explicit approval |
+| GKE workload deployment | Not started. Do not start without explicit approval |
 | Istio (STRICT mTLS, traffic management, canary) | **Verified on local kind** (Milestone 3); not on GKE |
-| OpenTelemetry, Prometheus, Loki, Tempo, Grafana | Not started |
+| OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on local kind** (Milestone 4) |
 | CD (publish images, deploy from CI) | Not started |
 | Read-only MCP server | Not started |
-| Incident simulation and rollback | Partial: canary failure drill and remediation (Milestone 3); no automated rollback |
+| Incident simulation and rollback | Canary drill is visible in metrics, traces, and logs. No automated rollback |

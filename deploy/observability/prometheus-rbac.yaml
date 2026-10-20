@@ -1,0 +1,15 @@
+# Bound into platformforge-dev only, by the Prometheus chart's RoleBinding.
+# Pod discovery for the Istio sidecar scrape. No node, secret, or configmap access.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: platformforge-prometheus
+  labels:
+    app.kubernetes.io/part-of: platformforge
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
