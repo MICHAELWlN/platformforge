@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Never commit credentials or local cluster config
+*.kubeconfig
+kubeconfig*
+.env
+.env.*
+*.tfstate
+*.tfstate.*
+.terraform/

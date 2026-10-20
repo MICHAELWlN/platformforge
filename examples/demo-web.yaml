@@ -1,0 +1,37 @@
+# Example PlatformForge service definition.
+#
+# Uses the unprivileged nginx image (runs as UID 101, listens on 8080) so it runs under
+# the Pod Security "restricted" profile with a read-only root filesystem. The orders and
+# inventory FastAPI services will use this same schema in a later milestone.
+apiVersion: platformforge.dev/v1alpha1
+kind: ServiceManifest
+metadata:
+  name: demo-web
+  namespace: platformforge-dev
+spec:
+  image: nginxinc/nginx-unprivileged:1.29-alpine
+  replicas: 2
+  port: 8080
+  env:
+    - name: LOG_LEVEL
+      value: info
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+  probes:
+    readiness:
+      path: /
+      initialDelaySeconds: 2
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+    liveness:
+      path: /
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
