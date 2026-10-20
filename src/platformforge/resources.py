@@ -12,15 +12,26 @@ from platformforge.manifest import HttpProbe, ServiceManifest
 MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
 MANAGED_BY_VALUE = "platformforge"
 NAME_LABEL = "app.kubernetes.io/name"
+# Istio derives the canonical revision (and DestinationRule subsets select) on this label.
+VERSION_LABEL = "app.kubernetes.io/version"
 PORT_NAME = "http"
 
 
 def labels_for(manifest: ServiceManifest) -> dict[str, str]:
+    """Service-level labels; the Service selector spans every version of the service."""
     return {NAME_LABEL: manifest.name, MANAGED_BY_LABEL: MANAGED_BY_VALUE}
 
 
+def pod_labels(manifest: ServiceManifest) -> dict[str, str]:
+    """Deployment selector and pod labels; versioned services add the version label."""
+    labels = labels_for(manifest)
+    if manifest.spec.version is not None:
+        labels[VERSION_LABEL] = manifest.spec.version
+    return labels
+
+
 def label_selector(manifest: ServiceManifest) -> str:
-    return ",".join(f"{key}={value}" for key, value in labels_for(manifest).items())
+    return ",".join(f"{key}={value}" for key, value in pod_labels(manifest).items())
 
 
 def build_namespace(name: str) -> client.V1Namespace:
@@ -31,8 +42,24 @@ def build_namespace(name: str) -> client.V1Namespace:
                 MANAGED_BY_LABEL: MANAGED_BY_VALUE,
                 "pod-security.kubernetes.io/enforce": "restricted",
                 "pod-security.kubernetes.io/enforce-version": "latest",
+                # Opt in to Istio sidecar injection (a no-op if Istio is not installed).
+                "istio-injection": "enabled",
             },
         )
+    )
+
+
+def build_service_account(manifest: ServiceManifest) -> client.V1ServiceAccount:
+    """Identity-only ServiceAccount: no RBAC bindings and no API token automount."""
+    return client.V1ServiceAccount(
+        api_version="v1",
+        kind="ServiceAccount",
+        metadata=client.V1ObjectMeta(
+            name=manifest.spec.service_account_name,
+            namespace=manifest.namespace,
+            labels=labels_for(manifest),
+        ),
+        automount_service_account_token=False,
     )
 
 
@@ -48,7 +75,15 @@ def _probe(probe: HttpProbe) -> client.V1Probe:
 
 def build_deployment(manifest: ServiceManifest) -> client.V1Deployment:
     spec = manifest.spec
-    labels = labels_for(manifest)
+    labels = pod_labels(manifest)
+    lifecycle = None
+    if spec.termination is not None and spec.termination.pre_stop_sleep_seconds > 0:
+        # Native sleep handler: the distroless images have no shell for an exec hook.
+        lifecycle = client.V1Lifecycle(
+            pre_stop=client.V1LifecycleHandler(
+                sleep=client.V1SleepAction(seconds=spec.termination.pre_stop_sleep_seconds)
+            )
+        )
     container = client.V1Container(
         name=manifest.name,
         image=spec.image,
@@ -61,6 +96,7 @@ def build_deployment(manifest: ServiceManifest) -> client.V1Deployment:
         ),
         readiness_probe=_probe(spec.probes.readiness),
         liveness_probe=_probe(spec.probes.liveness),
+        lifecycle=lifecycle,
         security_context=client.V1SecurityContext(
             allow_privilege_escalation=False,
             read_only_root_filesystem=True,
@@ -71,7 +107,11 @@ def build_deployment(manifest: ServiceManifest) -> client.V1Deployment:
     )
     pod_spec = client.V1PodSpec(
         containers=[container],
+        service_account_name=spec.service_account_name,
         automount_service_account_token=False,
+        termination_grace_period_seconds=(
+            spec.termination.grace_period_seconds if spec.termination is not None else None
+        ),
         enable_service_links=False,
         security_context=client.V1PodSecurityContext(
             run_as_non_root=True,
@@ -85,7 +125,7 @@ def build_deployment(manifest: ServiceManifest) -> client.V1Deployment:
         api_version="apps/v1",
         kind="Deployment",
         metadata=client.V1ObjectMeta(
-            name=manifest.name, namespace=manifest.namespace, labels=labels
+            name=manifest.deployment_name, namespace=manifest.namespace, labels=labels
         ),
         spec=client.V1DeploymentSpec(
             replicas=spec.replicas,

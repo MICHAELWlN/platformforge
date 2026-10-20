@@ -394,3 +394,355 @@ all 6 pods Running, READY 1/1, RESTARTS 0
 - The 504 timeout path driven deterministically in-cluster (it occurred naturally during
   scale-down; deterministic coverage is in unit tests).
 - Any traffic encryption or service identity (no mesh yet).
+
+# Milestone 3: Istio service mesh
+
+All M3 results were produced on 2026-10-20 against `kind-platformforge`. The current context
+was displayed before every cluster command. Output is abridged, not edited.
+
+## M3 environment additions
+
+| Component | Version / value |
+| --- | --- |
+| Kubernetes server | v1.37.0 (kind, 1 node, arm64, containerd 2.3.4) |
+| Node capacity | 12 CPU, 8124256Ki allocatable memory; requests after M3 (Istio + all workloads + test pods): 1630m CPU (13%), 1570Mi (19%) |
+| Istio / istioctl | 1.31.2 (supported for Kubernetes 1.32–1.37; 1.30 is not supported on 1.37) |
+| istioctl download | `istio-1.31.2-osx-arm64.tar.gz`, SHA-256 `c02f9390ff8300b550c7b13230feae80adebe31aa7136f2930a1918502c626d3`, identical to the release `.sha256` file |
+| Images | `platformforge/inventory-service:0.1.0` (unchanged, stable), `inventory-service:0.2.0`, `orders-service:0.2.0` |
+
+## M3.1 Installation (Phase A)
+
+```
+$ istioctl x precheck --context kind-platformforge
+✔ No issues found when checking the cluster. Istio is safe to install or upgrade!
+
+$ kubectl apply -f deploy/istio/istio-system-namespace.yaml
+$ istioctl install -f deploy/istio/istio-operator.yaml --context kind-platformforge -y
+(completed; istiod 1/1 and istio-cni-node 1/1 ready, 0 restarts)
+
+$ kubectl -n istio-system get pods      # re-checked after all test runs
+istio-cni-node-trql8     true   0   docker.io/istio/install-cni:1.31.2
+istiod-748c99cf6-7xj58   true   0   docker.io/istio/pilot:1.31.2
+
+$ istioctl version
+client version: 1.31.2
+control plane version: 1.31.2
+data plane version: 1.31.2 (8 proxies)
+
+$ docker exec platformforge-control-plane cat /etc/cni/net.d/10-kindnet.conflist   # plugin types
+['ptp', 'portmap', 'istio-cni']        # Istio CNI chained after kindnet
+```
+
+Rendered-manifest review (`istioctl manifest generate`, before install): only `istio-system`
+namespaced objects; one ClusterIP Service; injection webhooks only match
+`istio-injection=enabled` / `istio.io/rev` namespaces or `sidecar.istio.io/inject=true` pods.
+
+Injection and controlled restarts (one Deployment at a time, each waited to completion):
+
+```
+$ kubectl label namespace platformforge-dev istio-injection=enabled
+$ kubectl get ns -L istio-injection,pod-security.kubernetes.io/enforce
+NAME                 STATUS   AGE   ISTIO-INJECTION   ENFORCE
+default              Active   55m
+istio-system         Active   23m                     privileged
+kube-node-lease      Active   55m
+kube-public          Active   55m
+kube-system          Active   55m
+local-path-storage   Active   55m
+platformforge-dev    Active   46m   enabled           restricted
+$ kubectl rollout restart / rollout status  deploy/{inventory-service,orders-service,demo-web}
+deployment "inventory-service" successfully rolled out   (same for orders-service, demo-web)
+$ kubectl get events --field-selector reason=FailedCreate     # none
+$ kubectl label --dry-run=server --overwrite ns platformforge-dev pod-security.kubernetes.io/enforce-version=v1.37
+namespace/platformforge-dev labeled (server dry run)          # no PSA warnings for any meshed pod
+```
+
+Every pod: init containers `istio-validation`, `istio-proxy` (`restartPolicy: Always`, i.e.
+native sidecar); `istio-proxy` runs UID 1337, `runAsNonRoot`, `allowPrivilegeEscalation:
+false`, read-only root FS, `capabilities.drop: [ALL]`; no `istio-init`. `istioctl
+proxy-status`: all six sidecars subscribed to istiod 1.31.2 (CDS, LDS, EDS, RDS).
+
+Existing functionality after injection (still PERMISSIVE): integration suite 20/22.
+- `test_kind_deploy::test_09` failed once and was not a regression. My `kubectl rollout
+  restart` had added a `restartedAt` annotation, so the suite's first `platformforge deploy`
+  caused a real rollout, and `logs` saw the old pods while they terminated. On re-run (no
+  annotation) the file passed 10/10.
+- `test_services_kind::test_08` failed with a real behavior change. During the outage,
+  orders' sidecar returned `503 no_healthy_upstream` (Envoy flag `UH`), and orders v0.1.0
+  mapped any non-200 status to `502 inventory_bad_status`. Fixed in orders v0.2.0, which maps
+  upstream 503 → 503 `inventory_unavailable`.
+
+## M3.2 Versioned migration of inventory-service (approved deletion)
+
+The user approved deleting only `deployment/inventory-service` after verification gates. A
+continuous probe (≈10 req/s, orders pod → orders app → orders sidecar → inventory) ran
+21:31:01–21:33:51 UTC across the whole migration.
+
+| Gate | Result |
+| --- | --- |
+| Before | Service `inventory-service` ClusterIP `10.96.78.95`, uid `a75cea79-…`, selector `{managed-by, name}` |
+| `platformforge deploy services/manifests/inventory-service.yaml` | `ServiceAccount/inventory-service: created`, `Deployment/inventory-service-v0-1-0: created`, `Service/inventory-service: updated`, warning about the overlapping legacy Deployment, `Rollout complete: 2/2 available` |
+| 1. v0-1-0 Ready | replicas=2 ready=2 available=2 updated=2, generation 1/1 |
+| 2. Service routes to new pods | EndpointSlice: 4 ready endpoints (2 legacy, 2 v0.1.0). 40 tagged requests: legacy pods served 25, v0.1.0 pods 3 + 12 (counted by request ID in app logs) |
+| 3. Selector matches intended pods | Service selector selects 2 legacy + 2 v0.1.0 pods, all Ready |
+| 4. orders → inventory | 40/40 HTTP 200 |
+| 5. Service/ClusterIP preserved | `10.96.78.95`, same uid |
+| 6. Delete | `kubectl delete deployment inventory-service` (21:31:36); target confirmed as `platformforge-dev/Deployment/inventory-service`, managed-by=platformforge |
+| 7. Nothing else deleted | demo-web, inventory-service-v0-1-0, orders-service Deployments; all 3 Services; both new ServiceAccounts present |
+| 8. Availability after | 3 × 20 requests after the delete: 60/60 HTTP 200 |
+
+Downtime: **none observed.** The probe's own summary was lost because the background `kubectl
+exec` was killed when its launching shell returned. The same traffic was reconstructed from
+the orders sidecar access log, by `probe-N` request ID: **1580 requests, 1580 × 200**,
+21:31:01.597–21:33:51.437. By upstream pod IP: legacy pods `10.244.0.37` (135, last at
+21:31:36.487) and `10.244.0.38` (112, last at 21:31:36.696); v0.1.0 pods `10.244.0.41` (651)
+and `10.244.0.42` (682), through to the end. This measures the orders → inventory hop as seen
+by orders' sidecar. (Re-derived from the same logs after the test runs, with identical
+totals.)
+
+## M3.3 Workload identity (Phase B)
+
+```
+$ platformforge deploy services/manifests/orders-service.yaml --approve-context kind-platformforge
+ServiceAccount/orders-service: created
+Deployment/orders-service: updated
+Rollout complete: 2/2 available
+
+$ istioctl proxy-config secret <pod> -o json | (decode "default" cert) | openssl x509 -noout -ext subjectAltName -startdate -enddate
+inventory-service-v0-1-0-698799fd78-bx7g5  URI:spiffe://cluster.local/ns/platformforge-dev/sa/inventory-service  Oct 20 21:40:13 → Oct 21 21:42:13 2026 GMT
+orders-service-6ccbbfb5f4-6kfpp            URI:spiffe://cluster.local/ns/platformforge-dev/sa/orders-service     Oct 20 21:28:46 → Oct 21 21:30:46 2026 GMT
+demo-web-7d4489dfbb-76687                  URI:spiffe://cluster.local/ns/platformforge-dev/sa/default            Oct 20 21:20:49 → Oct 21 21:22:49 2026 GMT
+(SAN extension marked critical; demo-web declares no identity and keeps "default")
+
+pods: automountServiceAccountToken=False; projected token audiences=['istio-ca'] only
+
+$ kubectl auth can-i --list --as=system:serviceaccount:platformforge-dev:orders-service
+selfsubject{reviews,accessreviews,rulesreviews} create; clustertrustbundles get/list/watch;
+non-resource discovery/health URLs get          # Kubernetes defaults for every authenticated user
+$ kubectl auth can-i {get pods,list secrets,get configmaps,create pods,list services,
+                      get authorizationpolicies.security.istio.io} --as=…:{orders,inventory}-service
+no (12/12)
+bindings referencing platformforge-dev subjects: []
+```
+
+## M3.4 STRICT mTLS (Phase C)
+
+Control (no PeerAuthentication yet, i.e. Istio's default PERMISSIVE), from the non-mesh test
+pod `pf-test-client-plain`:
+
+```
+PERMISSIVE raw plaintext -> inventory pod IP:8080:  connected=true, received "HTTP/1.1 200 OK ..."
+PERMISSIVE plaintext -> inventory Service:   200 {"item_id":"widget",...}
+```
+
+After `kubectl apply -f deploy/istio/platformforge-dev/peer-authentication.yaml`:
+
+```
+STRICT raw plaintext -> each inventory/orders pod IP: connected=true, no HTTP response (reset)
+STRICT plaintext -> inventory Service:    connection reset
+STRICT plaintext -> orders Service:       connection reset
+STRICT orders identity -> inventory:      200
+STRICT mesh client -> orders -> inventory: 200
+
+$ istioctl x describe pod inventory-service-v0-1-0-698799fd78-bx7g5 -n platformforge-dev   # after all runs
+DestinationRule: inventory-service ... Matching subsets: v0-1-0 (Non-matching subsets v0-2-0)
+VirtualService: inventory-service
+   Route to host "inventory-service.platformforge-dev.svc.cluster.local" subset "v0-1-0" with weight 100%
+RBAC policies: ns[platformforge-dev]-policy[inventory-service]-rule[0]
+Effective PeerAuthentication:
+   Workload mTLS mode: STRICT
+Applied PeerAuthentication:
+   default.platformforge-dev
+```
+
+The same request (`mtls-evidence-0`), as logged by both sidecars:
+
+```
+orders outbound:    upstream_cluster=outbound|8080||inventory-service…  upstream_tls_version=TLSv1.3
+                    upstream_peer_uri_san=spiffe://cluster.local/ns/platformforge-dev/sa/inventory-service
+inventory inbound:  downstream_tls_version=TLSv1.3
+                    downstream_peer_uri_san=spiffe://cluster.local/ns/platformforge-dev/sa/orders-service
+```
+
+inventory's `istio_requests_total` (reporter=destination). At the time of the STRICT checks,
+the two v0.1.0 pods showed 688 and 722 requests from `sa/orders-service` with
+`connection_security_policy=mutual_tls`, plus exactly 2 with `none`: the two PERMISSIVE
+plaintext control requests above. Those pods were replaced during the test runs. The
+current pods, re-checked after run 3, show only `mutual_tls`:
+
+```
+inventory-service-v0-1-0-…-bx7g5: (orders-service, mutual_tls, 200) 1006, (orders-service, mutual_tls, 403) 1
+inventory-service-v0-1-0-…-tgz2t: (orders-service, mutual_tls, 200) 940,  (orders-service, mutual_tls, 403) 3,
+                                  (default, mutual_tls, 403) 1
+inventory-service-v0-2-0-…-jg29d: no requests since the stable route was restored
+```
+
+The 403s are the run 3 authorization negative tests (d3 and d4).
+
+Envoy's raw TLS handshake counters are not exported: Istio's default stats inclusion list
+trims them. The TLS evidence above therefore comes from access logs and Istio's standard
+metrics.
+
+Operator access under STRICT (checked after run 3):
+
+```
+$ kubectl -n platformforge-dev port-forward deploy/orders-service 18080:8080 &
+$ curl http://127.0.0.1:18080/orders/check/widget
+{"item_id":"widget","orderable":true,"quantity_available":42} HTTP 200
+$ curl http://127.0.0.1:18080/version
+{"service":"orders-service","version":"0.2.0","git_sha":"afcaf45-dirty"} HTTP 200
+```
+
+Additional finding: a meshed client that calls a **pod IP** directly is routed by its own
+sidecar through `PassthroughCluster` **without** mTLS (`upstream_tls_version=null`), and STRICT
+rejects it (`503`, `UC`, `upstream_reset_before_response_started`). Initially I wrote this
+as a positive control, and it failed. The test now asserts the rejection, and the positive
+control uses the Service name instead.
+
+## M3.5 Authorization (Phase D)
+
+Policy (`deploy/istio/platformforge-dev/inventory-authorization.yaml`): selector
+`app.kubernetes.io/name=inventory-service`, ALLOW, one rule: principal
+`cluster.local/ns/platformforge-dev/sa/orders-service`, `GET`, `/inventory/*`, port 8080.
+
+| Caller | Request | Result |
+| --- | --- | --- |
+| orders-service identity | `GET /inventory/widget` | 200 |
+| test client → orders → inventory | `GET /orders/check/widget` × 20 | 20 × 200 |
+| `sa/default` (meshed test client) | `GET /inventory/widget` | **403** `RBAC: access denied`; inventory log: `downstream_peer_uri_san=…/sa/default`, `TLSv1.3`, `response_code_details` starts with `rbac_access_denied` |
+| orders-service identity | `GET /version`, `GET /healthz`, `POST` and `DELETE /inventory/widget` | **403** each |
+| non-mesh plaintext client | any | connection reset (M3.4) |
+| `sa/default` → orders-service (not covered by the policy) | `GET /healthz` | 200: the policy is workload-scoped, not namespace-wide |
+| kubelet | readiness/liveness | probes rewritten to `:15020/app-health/inventory-service/{readyz,livez}`; pods Ready, 0 restarts; `platformforge status` HEALTHY |
+
+Only one AuthorizationPolicy exists in the namespace. `istioctl analyze -n platformforge-dev`:
+`✔ No validation issues found`.
+
+## M3.6 Canary release (Phase E)
+
+`deploy/istio/platformforge-dev/inventory-destinationrule.yaml` (subsets by
+`app.kubernetes.io/version`), then `platformforge deploy services/manifests/inventory-service-v0.2.0.yaml`:
+`Deployment/inventory-service-v0-2-0: created`, 1/1 available. inventory Service then had
+3 Ready endpoints (2 × v0.1.0, 1 × v0.2.0).
+
+Counts are `istio_requests_total` deltas from both orders sidecars (reporter=source), labeled
+by `destination_version`. Each sample was taken after the live Envoy route config on both
+orders sidecars showed the expected weights.
+
+| Routing | N | v0.1.0 | v0.2.0 | Non-200 |
+| --- | --- | --- | --- | --- |
+| stable (100/0), control, runs 1–4 | 200 each | 200 | **0** | 0 |
+| canary (90/10), run 1 | 1000 | 902 | 98 (9.8%) | 0 |
+| canary (90/10), run 2 | 1000 | 887 | 113 (11.3%) | 0 |
+| canary (90/10), run 3 | 1000 | 919 | 81 (8.1%) | 0 |
+| canary (90/10), run 4 (final) | 1000 | 912 | 88 (8.8%) | 0 |
+| **canary total** | 4000 | 3620 | **380 (9.5%)** | 0 |
+
+Binomial expectation per sample: 100 ± 9.49 (1 sd). The samples lie at −0.2, +1.4, −2.0,
+and −1.3 sd. Pod-proportional balancing would give ≈333. See docs/CANARY_RELEASE.md.
+
+## M3.7 Canary failure and recovery (Phase F)
+
+| Step | Run 1 | Run 2 | Run 3 | Run 4 (final) |
+| --- | --- | --- | --- | --- |
+| Faulty canary (`INVENTORY_FAILURE_PERCENT=100`), 500 requests at 90/10 | 458 × 200, **42 × 502** | 451 × 200, **49 × 502** | 454 × 200, **46 × 502** | 456 × 200, **44 × 502** |
+| Mesh view of the same window | v0.1.0 200 × 458; v0.2.0 500 × 42 | v0.1.0 200 × 451; v0.2.0 500 × 49 | v0.1.0 200 × 454; v0.2.0 500 × 46 | v0.1.0 200 × 456; v0.2.0 500 × 44 |
+| Apply stable VirtualService: sidecars converged | 1.1 s | 1.1 s | 1.1 s | 1.1 s |
+| 300 requests after remediation | 300 × 200, v0.2.0: 0 | same | same | same |
+| Redeploy healthy v0.2.0, keep stable routing | env `0`, in-pod lookup 200, VS 100/0, 50 × 200 | same | same | same |
+
+All 502 bodies were `inventory_bad_status`, and the canary pod logged `injected failure`
+for each. See docs/INCIDENT_RUNBOOK.md.
+
+## M3.8 Unit tests
+
+```
+$ pytest -m "not integration"
+289 passed, 55 deselected
+```
+
+| File | Tests | Covers |
+| --- | --- | --- |
+| `tests/unit/test_mesh_fields.py` (new) | 65 | `version` / `serviceAccountName` / `termination`: accepted values; rejection tests (bad versions, non-string, name length boundary 63/64, SA ≠ metadata.name incl. `default`/`orders-service`/`istiod`, snake_case key, termination bounds and ordering, `command` smuggling, other identity/label fields, allowlist still enforced); rendering (versioned names/labels/selectors, Service spans versions, identity-only SA, preStop sleep, grace period, unchanged output when unset, security defaults kept, namespace injection label); deployer (SA before Deployment, SA ownership preflight and 409 re-check, versioned preflight/status/logs/rollout names, overlap detection, allowlist re-check); CLI (dry-run includes SA, validate output) |
+| `tests/services/test_inventory.py` | 9 → 18 | failure knob off by default, 100% fails lookups but not health, partial %, invalid env/argument rejected |
+| `tests/services/test_orders.py` | 35 → 38 | upstream 503 → 503 `inventory_unavailable`, 504 → 504 `inventory_timeout`, 403 → 502 `inventory_forbidden`, 401 → 502 `inventory_bad_status` |
+
+All 212 pre-existing unit tests still pass. One M2 case was replaced: upstream 503 used to
+give `502 inventory_bad_status` and now gives `503 inventory_unavailable` (an intended
+behavior change).
+
+## M3.9 Integration tests
+
+`tests/integration/test_services_kind.py` was migrated from the API-server proxy (which
+STRICT now blocks) to in-cluster calls from the meshed test client. Its assertions are
+otherwise kept: orders reports version 0.2.0; inventory is now `inventory-service-v0-1-0`;
+the outage test scales every inventory version to 0 and restores each. The two
+parametrized `test_04` cases became one test (inventory endpoints are checked in-pod), so
+the file has 11 tests instead of 12.
+
+`tests/integration/test_services_mesh.py` (new, 34 tests): Phases A–F as above.
+
+```
+$ PLATFORMFORGE_IT_CONTEXT=kind-platformforge pytest -m integration -v
+run 1: 53 passed, 1 failed   (test_c3: the pod-IP passthrough finding in M3.4; test rewritten)
+run 2 (full suite): 344 passed in 68.96s
+run 3: 55 passed, 289 deselected in 62.70s
+run 4 (final full suite, below): 344 passed in 69.08s
+```
+
+## M3.10 Final complete run (after all documentation changes)
+
+```
+$ make lint
+.venv/bin/ruff check src services tests
+All checks passed!
+.venv/bin/ruff format --check src services tests
+38 files already formatted
+
+$ kubectl config current-context
+kind-platformforge
+$ PLATFORMFORGE_IT_CONTEXT=kind-platformforge pytest -v -s
+tests/integration/test_kind_deploy.py     10/10 PASSED   (Milestone 1)
+tests/integration/test_services_kind.py   11/11 PASSED   (Milestone 2, migrated)
+tests/integration/test_services_mesh.py   34/34 PASSED   (Milestone 3)
+test_c2[inventory-service] inventory-service-v0-1-0-…-qxfkw {'connected': True, 'error': 'ConnectionResetError: [Errno 104] Connection reset by peer'}
+test_e3 canary split over 1000: v0.1.0=912 (91.2%) v0.2.0=88 (8.8%)
+test_f1 during incident: client statuses={200: 456, 502: 44} mesh delta={('v0.1.0', '200'): 456, ('v0.2.0', '500'): 44}
+test_f2 sidecars converged on stable routing in 1.1s; after remediation: {('v0.1.0', '200'): 300}
+=================== 344 passed, 1 warning in 69.08s (0:01:09) ===================
+```
+
+The one warning is Starlette's TestClient deprecation notice (see M2).
+
+344 = 289 unit + 55 integration.
+- Unit: 212 pre-M3 plus 77 new (65 mesh fields, 9 inventory, 3 orders). By file: manifest
+  80, deployer 23, CLI 16, kubecontext 8, resources 8, mesh fields 65, services common 33,
+  inventory 18, orders 38.
+- Integration: 10 M1 + 11 M2 (migrated) + 34 M3. All 234 pre-M3 test scenarios still run;
+  the only count change is the merged `test_04`.
+
+Cluster state after the runs:
+
+```
+deployment.apps/demo-web                   2/2   nginxinc/nginx-unprivileged:1.29-alpine
+deployment.apps/inventory-service-v0-1-0   2/2   platformforge/inventory-service:0.1.0
+deployment.apps/inventory-service-v0-2-0   1/1   platformforge/inventory-service:0.2.0
+deployment.apps/orders-service             2/2   platformforge/orders-service:0.2.0
+service/{demo-web,inventory-service,orders-service}   ClusterIP (10.96.89.204, 10.96.78.95, 10.96.136.93)
+serviceaccount/{default,inventory-service,orders-service}
+all pods Ready, RESTARTS 0, sidecar Ready (except the plaintext test client, by design)
+peerauthentication/default STRICT; authorizationpolicy/inventory-service ALLOW;
+destinationrule/inventory-service; virtualservice/inventory-service v0-1-0=100 v0-2-0=0
+namespaces with istio-injection=enabled: platformforge-dev only
+```
+
+## What Milestone 3 evidence does not show
+
+- Anything on GKE, multi-node, or multi-cluster; only a single-node kind cluster.
+- Behavior under load. The largest sample was 1000 sequential requests.
+- Certificate rotation, root CA rotation, or an external CA. Only the issued 24h
+  certificates were observed.
+- Packet-level capture of ciphertext. Encryption is evidenced by both Envoys' TLS version,
+  peer certificates, and Istio's `connection_security_policy`, not by tcpdump.
+- Authorization for orders-service or demo-web; only inventory-service has a policy.
+- Egress restrictions or NetworkPolicy.

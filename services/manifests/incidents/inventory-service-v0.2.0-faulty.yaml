@@ -1,0 +1,43 @@
+# Incident drill only (docs/INCIDENT_RUNBOOK.md): a bad canary configuration. Identical to
+# ../inventory-service-v0.2.0.yaml except that every inventory lookup returns HTTP 500.
+# Health endpoints keep passing, so Kubernetes alone does not catch it. Recover by shifting
+# traffic to v0.1.0, then redeploying ../inventory-service-v0.2.0.yaml.
+apiVersion: platformforge.dev/v1alpha1
+kind: ServiceManifest
+metadata:
+  name: inventory-service
+  namespace: platformforge-dev
+spec:
+  image: platformforge/inventory-service:0.2.0
+  version: v0.2.0
+  serviceAccountName: inventory-service
+  replicas: 1
+  port: 8080
+  env:
+    - name: LOG_LEVEL
+      value: info
+    - name: INVENTORY_FAILURE_PERCENT
+      value: "100"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  probes:
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 1
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+  termination:
+    gracePeriodSeconds: 30
+    preStopSleepSeconds: 5

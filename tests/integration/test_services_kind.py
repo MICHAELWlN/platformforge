@@ -1,13 +1,16 @@
 """Integration tests for orders-service and inventory-service on a local kind cluster.
 
-Prerequisite: images built and loaded into kind (`make images kind-load`).
+Prerequisites: images built and loaded into kind (`make images kind-load`) and Istio
+installed with sidecar injection enabled for platformforge-dev (docs/ISTIO.md).
 
-Services are deployed with the PlatformForge CLI itself. HTTP calls from the test go
-through the Kubernetes API server's service proxy, so nothing is exposed outside the
-cluster; orders-service reaches inventory-service via in-cluster Service DNS.
+Services are deployed with the PlatformForge CLI itself. Since Milestone 3 the namespace
+enforces STRICT mTLS, so the Kubernetes API server's service proxy (a plaintext, non-mesh
+client) can no longer reach the services. HTTP calls instead run inside the cluster from
+the sidecar-injected test client pod (see tests/integration/mesh.py); nothing is exposed
+outside the cluster. orders-service reaches inventory-service via in-cluster Service DNS.
 
-test_08 temporarily scales inventory-service to 0 replicas to simulate an outage, then
-restores it with `platformforge deploy`. Nothing is deleted.
+test_08 temporarily scales every inventory-service Deployment to 0 replicas to simulate an
+outage, then restores them. Nothing is deleted.
 """
 
 from __future__ import annotations
@@ -18,18 +21,19 @@ import uuid
 from collections.abc import Callable
 
 import pytest
-from kubernetes.client.exceptions import ApiException
 
 from platformforge import deployer
 from platformforge.kubecontext import KubeClients
 from platformforge.manifest import load_manifest
 from tests.conftest import REPO_ROOT
+from tests.integration import mesh
 from tests.integration.conftest import NAMESPACE, run_cli
 
 pytestmark = pytest.mark.integration
 
 MANIFESTS = REPO_ROOT / "services" / "manifests"
 INVENTORY = MANIFESTS / "inventory-service.yaml"
+INVENTORY_CANARY = MANIFESTS / "inventory-service-v0.2.0.yaml"
 ORDERS = MANIFESTS / "orders-service.yaml"
 INVENTORY_DNS = "http://inventory-service.platformforge-dev.svc.cluster.local:8080"
 
@@ -42,35 +46,30 @@ def kube_with_images(kube: KubeClients) -> KubeClients:
         for img in node.status.images
         for name in img.names
     }
-    for path in (INVENTORY, ORDERS):
+    for path in (INVENTORY, INVENTORY_CANARY, ORDERS):
         image = f"docker.io/{load_manifest(path).spec.image}"
         if image not in on_node:
             pytest.fail(f"{image} is not loaded on the kind node; run `make images kind-load`")
+    mesh.ensure_client_pod(kube, mesh.MESH_CLIENT, mesh=True)
     return kube
 
 
 def http_get(kube: KubeClients, service: str, path: str, request_id: str):
-    """GET http://<service>:http/<path> via the API server proxy -> (status, headers, json).
-
-    Header names are lowercased: the API server (Go) canonicalizes them, e.g. X-Request-Id.
-    """
-    try:
-        resp = kube.core.connect_get_namespaced_service_proxy_with_path(
-            f"{service}:http",
-            NAMESPACE,
-            path.lstrip("/"),
-            _headers={"X-Request-ID": request_id},
-            _preload_content=False,
-            _request_timeout=15,
-        )
-        return resp.status, _lower(resp.headers), json.loads(resp.data)
-    except ApiException as exc:
-        body = json.loads(exc.body) if exc.body else None
-        return exc.status, _lower(exc.headers or {}), body
+    """GET http://<service>:8080<path> from the in-mesh test client -> (status, headers, json)."""
+    result = mesh.http_one(
+        kube,
+        mesh.MESH_CLIENT,
+        "client",
+        f"http://{service}.{NAMESPACE}.svc.cluster.local:8080{path}",
+        rid_prefix=request_id,
+    )
+    return result["status"], result["headers"], result.get("json")
 
 
-def _lower(headers) -> dict[str, str]:
-    return {key.lower(): value for key, value in headers.items()}
+def in_pod_get(kube: KubeClients, pod: str, container: str, path: str):
+    """GET the app on localhost inside its own pod (bypasses the sidecar's inbound policy)."""
+    result = mesh.http_one(kube, pod, container, f"http://127.0.0.1:8080{path}")
+    return result["status"], result.get("json")
 
 
 def wait_until(predicate: Callable[[], object], timeout: float, interval: float = 1.0):
@@ -84,15 +83,24 @@ def wait_until(predicate: Callable[[], object], timeout: float, interval: float 
         time.sleep(interval)
 
 
-def json_log_lines(kube: KubeClients, manifest_path) -> list[dict]:
+def json_log_lines(kube: KubeClients, *manifest_paths) -> list[dict]:
     lines = []
-    for pod_logs in deployer.get_logs(kube.core, load_manifest(manifest_path), tail_lines=500):
-        for line in pod_logs.text.splitlines():
-            try:
-                lines.append(json.loads(line) | {"_pod": pod_logs.pod})
-            except json.JSONDecodeError:
-                pytest.fail(f"non-JSON log line from {pod_logs.pod}: {line!r}")
+    for path in manifest_paths:
+        for pod_logs in deployer.get_logs(kube.core, load_manifest(path), tail_lines=500):
+            for line in pod_logs.text.splitlines():
+                try:
+                    lines.append(json.loads(line) | {"_pod": pod_logs.pod})
+                except json.JSONDecodeError:
+                    pytest.fail(f"non-JSON log line from {pod_logs.pod}: {line!r}")
     return lines
+
+
+def inventory_deployments(kube: KubeClients) -> list:
+    return kube.apps.list_namespaced_deployment(
+        NAMESPACE,
+        label_selector="app.kubernetes.io/name=inventory-service,"
+        "app.kubernetes.io/managed-by=platformforge",
+    ).items
 
 
 def rid() -> str:
@@ -103,6 +111,8 @@ def test_01_deploy_inventory_with_platformforge(kube_with_images):
     result = run_cli("deploy", str(INVENTORY), "--create-namespace", "--timeout", "180")
     print(result.output)
     assert result.exit_code == 0, result.output
+    assert "ServiceAccount/inventory-service:" in result.output
+    assert "Deployment/inventory-service-v0-1-0:" in result.output
     assert "Rollout complete: 2/2 available" in result.output
 
 
@@ -110,6 +120,7 @@ def test_02_deploy_orders_with_platformforge(kube_with_images):
     result = run_cli("deploy", str(ORDERS), "--timeout", "180")
     print(result.output)
     assert result.exit_code == 0, result.output
+    assert "ServiceAccount/orders-service:" in result.output
     assert "Rollout complete: 2/2 available" in result.output
 
 
@@ -123,14 +134,23 @@ def test_03_status_healthy(kube_with_images, manifest):
     assert "Health:     HEALTHY" in result.output
 
 
-@pytest.mark.parametrize("service", ["inventory-service", "orders-service"])
-def test_04_health_and_version_endpoints(kube_with_images, service):
-    assert http_get(kube_with_images, service, "/healthz", rid())[0] == 200
-    assert http_get(kube_with_images, service, "/readyz", rid())[0] == 200
-    status, _, body = http_get(kube_with_images, service, "/version", rid())
-    assert status == 200
-    assert body["service"] == service
-    assert body["version"] == "0.1.0"
+def test_04_health_and_version_endpoints(kube_with_images):
+    kube = kube_with_images
+    assert http_get(kube, "orders-service", "/healthz", rid())[0] == 200
+    assert http_get(kube, "orders-service", "/readyz", rid())[0] == 200
+    status, _, body = http_get(kube, "orders-service", "/version", rid())
+    assert (status, body["service"], body["version"]) == (200, "orders-service", "0.2.0")
+
+    # inventory-service only admits orders-service over the mesh (AuthorizationPolicy), so
+    # its own endpoints are checked from inside a v0.1.0 pod.
+    pod = mesh.pods_of(
+        kube, "app.kubernetes.io/version=v0.1.0,app.kubernetes.io/name=inventory-service"
+    )[0]
+    name = pod.metadata.name
+    assert in_pod_get(kube, name, "inventory-service", "/healthz")[0] == 200
+    assert in_pod_get(kube, name, "inventory-service", "/readyz")[0] == 200
+    status, body = in_pod_get(kube, name, "inventory-service", "/version")
+    assert (status, body["service"], body["version"]) == (200, "inventory-service", "0.1.0")
 
 
 def test_05_orders_calls_inventory_and_propagates_request_id(kube_with_images):
@@ -146,7 +166,7 @@ def test_05_orders_calls_inventory_and_propagates_request_id(kube_with_images):
     def inventory_saw_it():
         return [
             line
-            for line in json_log_lines(kube_with_images, INVENTORY)
+            for line in json_log_lines(kube_with_images, INVENTORY, INVENTORY_CANARY)
             if line.get("request_id") == request_id and line.get("path") == "/inventory/widget"
         ]
 
@@ -181,15 +201,14 @@ def test_07_invalid_item_rejected_by_orders(kube_with_images):
 
 def test_08_inventory_outage_returns_503_then_recovers(kube_with_images):
     kube = kube_with_images
-    dep = kube.apps.read_namespaced_deployment("inventory-service", NAMESPACE)
-    assert dep.metadata.labels.get("app.kubernetes.io/managed-by") == "platformforge"
-
-    kube.apps.patch_namespaced_deployment_scale(
-        "inventory-service",
-        NAMESPACE,
-        {"spec": {"replicas": 0}},
-        _content_type="application/merge-patch+json",
-    )
+    deployments = inventory_deployments(kube)
+    assert deployments, "no managed inventory-service Deployments found"
+    previous = {d.metadata.name: d.spec.replicas for d in deployments}
+    print("scaling to 0:", previous)
+    for name in previous:
+        kube.apps.patch_namespaced_deployment_scale(
+            name, NAMESPACE, {"spec": {"replicas": 0}}, _content_type="application/merge-patch+json"
+        )
     try:
 
         def outage_observed():
@@ -200,6 +219,8 @@ def test_08_inventory_outage_returns_503_then_recovers(kube_with_images):
         assert outage, "orders-service never reported inventory-service as unavailable"
         status, headers, body = outage
         print("during outage:", status, body)
+        # In the mesh, orders' sidecar answers 503 "no healthy upstream"; orders v0.2.0 maps
+        # that to the same error a refused connection produced before the mesh.
         assert body["detail"]["error"] == "inventory_unavailable"
         assert body["detail"]["request_id"].startswith("it-")
         assert body["detail"]["request_id"] == headers.get("x-request-id")
@@ -212,8 +233,16 @@ def test_08_inventory_outage_returns_503_then_recovers(kube_with_images):
     finally:
         restore = run_cli("deploy", str(INVENTORY), "--timeout", "180")
         print(restore.output)
+        for name, replicas in previous.items():
+            if name != "inventory-service-v0-1-0":
+                kube.apps.patch_namespaced_deployment_scale(
+                    name,
+                    NAMESPACE,
+                    {"spec": {"replicas": replicas}},
+                    _content_type="application/merge-patch+json",
+                )
     assert restore.exit_code == 0, restore.output
-    assert "Deployment/inventory-service: updated" in restore.output
+    assert "Deployment/inventory-service-v0-1-0: updated" in restore.output
     assert "Rollout complete: 2/2 available" in restore.output
 
     def recovered():
@@ -224,6 +253,9 @@ def test_08_inventory_outage_returns_503_then_recovers(kube_with_images):
     assert recovery, "orders-service did not recover after inventory-service was restored"
     print("after recovery:", recovery[0], recovery[2])
     assert recovery[2]["orderable"] is True
+    for name, replicas in previous.items():
+        dep = kube.apps.read_namespaced_deployment(name, NAMESPACE)
+        assert dep.spec.replicas == replicas
 
 
 @pytest.mark.parametrize("manifest", [INVENTORY, ORDERS], ids=["inventory", "orders"])

@@ -5,7 +5,9 @@ metadata:
   namespace: platformforge-dev
 spec:
   # Built locally and loaded into kind (`make images kind-load`); not pulled from a registry.
-  image: platformforge/orders-service:0.1.0
+  image: platformforge/orders-service:0.2.0
+  # Its own identity: inventory-service's AuthorizationPolicy allows exactly this principal.
+  serviceAccountName: orders-service
   replicas: 2
   port: 8080
   env:
@@ -36,3 +38,6 @@ spec:
       periodSeconds: 10
       timeoutSeconds: 2
       failureThreshold: 3
+  termination:
+    gracePeriodSeconds: 30
+    preStopSleepSeconds: 5

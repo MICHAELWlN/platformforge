@@ -1,4 +1,6 @@
 .venv/
+# Downloaded tool binaries (e.g. istioctl); see docs/ISTIO.md
+.tools/
 __pycache__/
 *.py[cod]
 *.egg-info/

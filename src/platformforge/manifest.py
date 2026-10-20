@@ -41,6 +41,7 @@ _IMAGE = re.compile(
     r"(?::(?P<tag>[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}))?"
     r"(?:@(?P<digest>sha256:[a-f0-9]{64}))?$"
 )
+_VERSION = re.compile(r"^v(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})$")
 _CPU = re.compile(r"^(?:[0-9]{1,6}m|[0-9]{1,3}(?:\.[0-9]{1,3})?)$")
 _MEMORY = re.compile(r"^[0-9]{1,12}(?:Ki|Mi|Gi)?$")
 _MEMORY_FACTORS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3}
@@ -192,13 +193,39 @@ class Probes(_Model):
     liveness: HttpProbe
 
 
+class Termination(_Model):
+    grace_period_seconds: int = Field(ge=1, le=300, alias="gracePeriodSeconds")
+    # Delay before SIGTERM so endpoint removal propagates to kube-proxy / Envoy first.
+    pre_stop_sleep_seconds: int = Field(default=0, ge=0, le=60, alias="preStopSleepSeconds")
+
+    @model_validator(mode="after")
+    def _check_order(self) -> Termination:
+        if self.pre_stop_sleep_seconds >= self.grace_period_seconds:
+            raise ValueError("preStopSleepSeconds must be less than gracePeriodSeconds")
+        return self
+
+
 class ServiceSpec(_Model):
     image: str
+    # Release track, e.g. "v0.2.0". Versioned services run one Deployment per version
+    # behind a single Service, which is what mesh subsets and canaries route between.
+    version: str | None = None
+    # Workload identity. Must equal metadata.name (enforced on ServiceManifest) so a
+    # manifest can never run under, and be authorized as, another service's identity.
+    service_account_name: str | None = Field(default=None, alias="serviceAccountName")
     replicas: int = Field(default=1, ge=1, le=MAX_REPLICAS)
     port: int = Field(ge=1024, le=65535)
     env: list[EnvVar] = Field(default_factory=list, max_length=MAX_ENV_VARS)
     resources: Resources
     probes: Probes
+    termination: Termination | None = None
+
+    @field_validator("version")
+    @classmethod
+    def _check_version(cls, value: str | None) -> str | None:
+        if value is not None and not _VERSION.fullmatch(value):
+            raise ValueError("must look like 'v1.2.3' (no leading zeros, max 3 digits each)")
+        return value
 
     @field_validator("image")
     @classmethod
@@ -229,6 +256,21 @@ class ServiceManifest(_Model):
     metadata: Metadata
     spec: ServiceSpec
 
+    @model_validator(mode="after")
+    def _check_identity_and_names(self) -> ServiceManifest:
+        sa = self.spec.service_account_name
+        if sa is not None and sa != self.metadata.name:
+            raise ValueError(
+                f"spec.serviceAccountName must equal metadata.name ({self.metadata.name!r}); "
+                "a service may only run under its own identity"
+            )
+        if len(self.deployment_name) > 63:
+            raise ValueError(
+                f"metadata.name plus spec.version gives Deployment name "
+                f"{self.deployment_name!r}, which exceeds 63 characters"
+            )
+        return self
+
     @property
     def name(self) -> str:
         return self.metadata.name
@@ -236,6 +278,13 @@ class ServiceManifest(_Model):
     @property
     def namespace(self) -> str:
         return self.metadata.namespace
+
+    @property
+    def deployment_name(self) -> str:
+        """``<name>`` for unversioned services, ``<name>-v1-2-3`` for versioned ones."""
+        if self.spec.version is None:
+            return self.metadata.name
+        return f"{self.metadata.name}-{self.spec.version.replace('.', '-')}"
 
 
 def _format_validation_error(error: ValidationError) -> str:

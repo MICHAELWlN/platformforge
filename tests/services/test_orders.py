@@ -90,7 +90,11 @@ def _raise(exc_type):
         (_raise(httpx.ReadTimeout), 504, "inventory_timeout"),
         (_raise(httpx.DecodingError), 502, "inventory_bad_response"),
         (lambda _: httpx.Response(500, text="boom"), 502, "inventory_bad_status"),
-        (lambda _: httpx.Response(503), 502, "inventory_bad_status"),
+        # Envoy-synthesized responses from the local sidecar (mesh mode).
+        (lambda _: httpx.Response(503, text="no healthy upstream"), 503, "inventory_unavailable"),
+        (lambda _: httpx.Response(504, text="upstream request timeout"), 504, "inventory_timeout"),
+        (lambda _: httpx.Response(403, text="RBAC: access denied"), 502, "inventory_forbidden"),
+        (lambda _: httpx.Response(401), 502, "inventory_bad_status"),
         (
             lambda _: httpx.Response(302, headers={"Location": "http://evil"}),
             502,

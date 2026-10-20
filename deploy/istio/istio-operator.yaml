@@ -1,0 +1,78 @@
+# Istio 1.31.2 install configuration for the local kind cluster (Kubernetes 1.37).
+# Install:  istioctl install -f deploy/istio/istio-operator.yaml --context kind-platformforge
+# See docs/ISTIO.md for the full procedure, verification, and cleanup.
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: platformforge
+  namespace: istio-system
+spec:
+  # `minimal` = CRDs + istiod only. No ingress/egress gateways, so nothing is exposed.
+  profile: minimal
+  meshConfig:
+    # Envoy access logs (JSON, stdout) carry the peer identity and TLS version so mTLS
+    # and authorization decisions can be verified from evidence, not assumed.
+    accessLogFile: /dev/stdout
+    accessLogEncoding: JSON
+    accessLogFormat: |
+      {
+        "start_time": "%START_TIME%",
+        "method": "%REQ(:METHOD)%",
+        "path": "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+        "protocol": "%PROTOCOL%",
+        "response_code": "%RESPONSE_CODE%",
+        "response_code_details": "%RESPONSE_CODE_DETAILS%",
+        "response_flags": "%RESPONSE_FLAGS%",
+        "connection_termination_details": "%CONNECTION_TERMINATION_DETAILS%",
+        "request_id": "%REQ(X-REQUEST-ID)%",
+        "authority": "%REQ(:AUTHORITY)%",
+        "duration": "%DURATION%",
+        "downstream_remote_address": "%DOWNSTREAM_REMOTE_ADDRESS%",
+        "downstream_local_address": "%DOWNSTREAM_LOCAL_ADDRESS%",
+        "downstream_peer_uri_san": "%DOWNSTREAM_PEER_URI_SAN%",
+        "downstream_tls_version": "%DOWNSTREAM_TLS_VERSION%",
+        "requested_server_name": "%REQUESTED_SERVER_NAME%",
+        "upstream_cluster": "%UPSTREAM_CLUSTER%",
+        "upstream_host": "%UPSTREAM_HOST%",
+        "upstream_peer_uri_san": "%UPSTREAM_PEER_URI_SAN%",
+        "upstream_tls_version": "%UPSTREAM_TLS_VERSION%",
+        "upstream_transport_failure_reason": "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+      }
+    # Tracing is a later milestone; disabling it also stops Envoy from rewriting
+    # application-generated X-Request-ID values.
+    enableTracing: false
+  components:
+    # Istio CNI replaces the privileged istio-init container, which is what lets meshed pods
+    # pass the `restricted` Pod Security level enforced on platformforge-dev.
+    cni:
+      enabled: true
+      namespace: istio-system
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+  values:
+    pilot:
+      autoscaleEnabled: false
+      replicaCount: 1
+    cni:
+      excludeNamespaces:
+        - kube-system
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+    global:
+      proxy:
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi

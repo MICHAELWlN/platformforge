@@ -1,0 +1,28 @@
+# Stable routing: 100% of inventory traffic to v0.1.0. Applying this file is also the
+# canary rollback / incident remediation step (docs/INCIDENT_RUNBOOK.md).
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: inventory-service
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/part-of: platformforge
+spec:
+  hosts:
+    - inventory-service.platformforge-dev.svc.cluster.local
+  exportTo: ["."]
+  http:
+    - name: inventory
+      route:
+        - destination:
+            host: inventory-service.platformforge-dev.svc.cluster.local
+            subset: v0-1-0
+            port:
+              number: 8080
+          weight: 100
+        - destination:
+            host: inventory-service.platformforge-dev.svc.cluster.local
+            subset: v0-2-0
+            port:
+              number: 8080
+          weight: 0

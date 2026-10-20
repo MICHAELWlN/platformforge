@@ -1,5 +1,5 @@
 VENV        ?= .venv
-VERSION     ?= 0.1.0
+VERSION     ?= 0.2.0
 GIT_SHA     ?= $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 PLATFORM    ?= linux/arm64
 KIND_CLUSTER ?= platformforge

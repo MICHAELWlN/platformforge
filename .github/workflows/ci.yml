@@ -67,7 +67,7 @@ jobs:
           docker build
           --target "${{ matrix.service }}"
           --provenance=false
-          --build-arg VERSION=0.1.0
+          --build-arg VERSION=0.2.0
           --build-arg GIT_SHA="${GITHUB_SHA::7}"
           -t "platformforge/${{ matrix.service }}:ci"
           services

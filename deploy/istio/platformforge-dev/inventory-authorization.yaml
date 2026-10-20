@@ -1,0 +1,28 @@
+# inventory-service accepts exactly one caller: the orders-service workload identity, and
+# only for GET /inventory/*. With an ALLOW policy present, anything not matched is denied
+# (other identities, other paths/methods, and plaintext peers, which carry no principal).
+#
+# Kubelet probes are unaffected: Istio rewrites them to the sidecar agent on port 15020,
+# which forwards them to the app over localhost, bypassing this inbound policy.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: inventory-service
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/part-of: platformforge
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/platformforge-dev/sa/orders-service
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/inventory/*"]
+            ports: ["8080"]

@@ -1,7 +1,8 @@
 # Architecture
 
-This document describes what exists today (Milestones 1 and 2) and, separately, the target
-architecture. Only the first two sections are implemented.
+This document describes what exists today (Milestones 1–3) and, separately, the target
+architecture. Only the first three sections are implemented, and only on a local kind
+cluster.
 
 ## Milestone 1: implemented
 
@@ -39,7 +40,7 @@ architecture. Only the first two sections are implemented.
 | Module | Responsibility | Talks to cluster |
 | --- | --- | --- |
 | `manifest.py` | Schema, allowlist, quantity parsing, YAML loading | No |
-| `resources.py` | Render Deployment / Service / Namespace objects | No |
+| `resources.py` | Render Deployment / Service / Namespace / ServiceAccount objects | No |
 | `kubecontext.py` | Show current context, approval, build API clients | Builds clients only |
 | `deployer.py` | Create/replace, ownership checks, rollout wait, status, logs | Yes |
 | `cli.py` | Commands, output, exit codes | Via the above |
@@ -94,8 +95,10 @@ conditions `kubectl rollout status` uses, including waiting for old replicas to 
 ```
 
 Both Deployments and Services are created by `platformforge deploy` from
-`services/manifests/*.yaml`. No CLI or schema changes were needed: the existing manifest
-fields (image, replicas, port, env, resources, probes) were sufficient.
+`services/manifests/*.yaml`. Milestone 2 needed no CLI or schema changes: the existing
+manifest fields (image, replicas, port, env, resources, probes) were sufficient. Milestone 3
+adds the mesh in front of this path and changes the test client to an in-cluster pod; see
+below.
 
 ### Code layout
 
@@ -147,13 +150,95 @@ fields (image, replicas, port, env, resources, probes) were sufficient.
 `permissions: contents: read`, actions pinned to commit SHAs, `persist-credentials: false`,
 no secrets, no cloud credentials, no cluster.
 
+## Milestone 3: implemented (Istio service mesh, local kind)
+
+```
+ istio-system (PSA privileged; installed by istioctl, not PlatformForge)
+   istiod 1.31.2 ── xDS config + SPIFFE certificates (24h) ──┐
+   istio-cni-node (DaemonSet; sets up pod traffic redirection) │
+                                                              │
+ platformforge-dev (PSA restricted, istio-injection=enabled)  │
+   PeerAuthentication default: STRICT                         │
+                                                              v
+   pf-test-client-mesh (sa/default) ──mTLS──┐     every pod: app + native istio-proxy sidecar
+                                            v
+   Service orders-service ──> orders-service pods (sa/orders-service, x2)
+                                  |  app -> localhost sidecar (plain HTTP)
+                                  |  sidecar -> sidecar: mTLS TLSv1.3,
+                                  |  SAN spiffe://cluster.local/ns/platformforge-dev/sa/orders-service
+                                  v
+   Service inventory-service ── VirtualService (weights) + DestinationRule (subsets by version label)
+          |                          |
+          | 90 (stable: 100)         | 10 (stable: 0)
+          v                          v
+   inventory-service-v0-1-0 (x2)   inventory-service-v0-2-0 (x1)     both sa/inventory-service
+          \__ AuthorizationPolicy inventory-service (ALLOW only:
+              principal .../sa/orders-service, GET /inventory/*, port 8080)
+
+   pf-test-client-plain (no sidecar) ──plaintext──> any pod: TCP accepted, then reset
+   kubelet probes ──> :15020/app-health/<container>/... (sidecar agent) ──> app on localhost
+```
+
+### Responsibilities
+
+| Concern | Owner | Where |
+| --- | --- | --- |
+| Istio control plane, CNI | istioctl, operator | `deploy/istio/istio-operator.yaml`, `istio-system-namespace.yaml` |
+| Sidecar injection scope | namespace label | `istio-injection=enabled` on `platformforge-dev` only; `--create-namespace` sets it |
+| Workload identity | PlatformForge | `serviceAccountName` → ServiceAccount (no token automount, no RBAC) + `spec.serviceAccountName` |
+| Version labels and Deployment names | PlatformForge | `version` → `app.kubernetes.io/version` and `<name>-vX-Y-Z` |
+| Graceful termination | PlatformForge | `termination` → `terminationGracePeriodSeconds`, native `preStop: sleep` |
+| mTLS mode, authorization, routing | reviewed YAML, applied with kubectl | `deploy/istio/platformforge-dev/*.yaml` |
+
+PlatformForge does not render Istio objects. The routing and security policy is a small,
+fixed set of reviewed files. Letting the CLI accept them would turn it into an
+arbitrary-manifest executor, which this project deliberately avoids.
+
+### Trust boundaries under the mesh
+
+- **Identity is bound to the ServiceAccount.** The manifest can only name a ServiceAccount
+  equal to `metadata.name`. One service therefore cannot claim another's SPIFFE identity
+  through PlatformForge. Someone with direct `kubectl` access to the namespace still can.
+- **The ServiceAccounts have no API permissions.** Pods mount only Istio's `istio-ca`
+  audience token, which istiod accepts for certificate signing. The Kubernetes API audience
+  token is not mounted.
+- **STRICT applies to every sidecar in the namespace.** Clients without a sidecar, including
+  the kube-apiserver service proxy, cannot get responses.
+- **Authorization is per workload.** inventory-service has an ALLOW policy, so anything not
+  matched is denied. orders-service and demo-web have no policy, so any mTLS peer is
+  allowed.
+- **Probes bypass mTLS and authorization**, by design. The kubelet calls the sidecar agent
+  on port 15020, which forwards to the app over localhost.
+
+### Versioned Deployments and the canary
+
+A manifest with `version` renders Deployment `<name>-<version>`. Pods are labeled
+`app.kubernetes.io/version`; the Deployment selector includes the version, and the Service
+selector does not. Several versions can therefore run behind one Service without their
+ReplicaSets fighting over pods. Without Istio routing, the Service spreads traffic across
+pods (≈1/3 to a 1-replica canary next to 2 stable replicas). With the VirtualService, the
+caller's sidecar picks the subset by weight, independent of replica counts. See
+[docs/CANARY_RELEASE.md](docs/CANARY_RELEASE.md).
+
+`find_overlapping_deployments` warns when another managed Deployment, such as the
+pre-version `inventory-service`, selects the same pods. PlatformForge never deletes
+workloads.
+
+### Failure mapping under the mesh
+
+orders-service now also maps statuses synthesized by its own sidecar:
+- 503 (`no_healthy_upstream`) → 503 `inventory_unavailable`.
+- 504 → 504 `inventory_timeout`.
+- 403 (`RBAC: access denied`) → 502 `inventory_forbidden`.
+- Other non-200 statuses, such as an injected 500, → 502 `inventory_bad_status`.
+
 ## Target architecture: not yet implemented
 
 The following are planned and **do not exist in the repository yet**:
 
 - Terraform-managed GCP: VPC, GKE (private nodes, Workload Identity), Artifact Registry
 - GKE workload deployment through the same CLI
-- Istio with STRICT mTLS, traffic management, and canary deployments
+- Istio on GKE (the mesh exists only on local kind; see Milestone 3)
 - OpenTelemetry instrumentation; Prometheus, Loki, Tempo, Grafana
 - CD (image publishing and deployment from CI)
 - Read-only MCP server for Kubernetes diagnostics

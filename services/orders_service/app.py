@@ -110,6 +110,18 @@ def create_app(
                 status_code=404,
                 detail={"error": "item_not_found", "request_id": current_request_id()},
             )
+        # In the mesh, the local Envoy sidecar answers for an unreachable upstream with a
+        # synthesized status instead of a connection error, so map those explicitly.
+        if response.status_code == 503:
+            raise _upstream_error(503, "inventory_unavailable", "inventory-service is unavailable")
+        if response.status_code == 504:
+            raise _upstream_error(
+                504, "inventory_timeout", "inventory-service did not respond in time"
+            )
+        if response.status_code == 403:
+            raise _upstream_error(
+                502, "inventory_forbidden", "inventory-service denied this caller"
+            )
         if response.status_code != 200:
             raise _upstream_error(
                 502, "inventory_bad_status", "inventory-service returned an unexpected status"

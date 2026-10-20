@@ -1,0 +1,11 @@
+# The istio-cni-node DaemonSet needs hostPath volumes and privileges to chain the CNI plugin
+# into the node's CNI config, so its namespace must enforce the `privileged` Pod Security
+# level (https://istio.io/latest/docs/setup/additional-setup/pod-security-admission/).
+# Application namespaces (platformforge-dev) stay on `restricted`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: latest

@@ -1,0 +1,12 @@
+# STRICT mTLS for every sidecar in platformforge-dev: inbound plaintext is rejected.
+# Namespace-scoped on purpose; no mesh-wide policy is created in istio-system.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/part-of: platformforge
+spec:
+  mtls:
+    mode: STRICT

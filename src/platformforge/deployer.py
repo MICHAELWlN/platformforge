@@ -17,7 +17,10 @@ from platformforge.resources import (
     build_deployment,
     build_namespace,
     build_service,
+    build_service_account,
     label_selector,
+    labels_for,
+    pod_labels,
 )
 
 FIELD_MANAGER = "platformforge"
@@ -52,7 +55,9 @@ def _assert_allowed(namespace: str) -> None:
         raise DeployError(str(exc)) from exc
 
 
-def _assert_managed(obj: client.V1Deployment | client.V1Service, kind: str, name: str) -> None:
+def _assert_managed(
+    obj: client.V1Deployment | client.V1Service | client.V1ServiceAccount, kind: str, name: str
+) -> None:
     labels = (obj.metadata.labels or {}) if obj.metadata else {}
     if labels.get(MANAGED_BY_LABEL) != MANAGED_BY_VALUE:
         raise OwnershipError(
@@ -77,22 +82,44 @@ def ensure_namespace(core: client.CoreV1Api, namespace: str, create: bool) -> Ap
     return AppliedResource("Namespace", namespace, "created")
 
 
-def apply_deployment(apps: client.AppsV1Api, manifest: ServiceManifest) -> AppliedResource:
+def apply_service_account(core: client.CoreV1Api, manifest: ServiceManifest) -> AppliedResource:
     _assert_allowed(manifest.namespace)
-    body = build_deployment(manifest)
+    name = manifest.spec.service_account_name
+    if name is None:
+        raise DeployError(f"{manifest.name!r} does not declare spec.serviceAccountName")
+    body = build_service_account(manifest)
     try:
-        apps.create_namespaced_deployment(manifest.namespace, body, field_manager=FIELD_MANAGER)
-        return AppliedResource("Deployment", manifest.name, "created")
+        core.create_namespaced_service_account(
+            manifest.namespace, body, field_manager=FIELD_MANAGER
+        )
+        return AppliedResource("ServiceAccount", name, "created")
     except ApiException as exc:
         if exc.status != 409:
             raise
-    existing = apps.read_namespaced_deployment(manifest.name, manifest.namespace)
-    _assert_managed(existing, "Deployment", manifest.name)
+    existing = core.read_namespaced_service_account(name, manifest.namespace)
+    _assert_managed(existing, "ServiceAccount", name)
     body.metadata.resource_version = existing.metadata.resource_version
-    apps.replace_namespaced_deployment(
-        manifest.name, manifest.namespace, body, field_manager=FIELD_MANAGER
+    core.replace_namespaced_service_account(
+        name, manifest.namespace, body, field_manager=FIELD_MANAGER
     )
-    return AppliedResource("Deployment", manifest.name, "updated")
+    return AppliedResource("ServiceAccount", name, "updated")
+
+
+def apply_deployment(apps: client.AppsV1Api, manifest: ServiceManifest) -> AppliedResource:
+    _assert_allowed(manifest.namespace)
+    name = manifest.deployment_name
+    body = build_deployment(manifest)
+    try:
+        apps.create_namespaced_deployment(manifest.namespace, body, field_manager=FIELD_MANAGER)
+        return AppliedResource("Deployment", name, "created")
+    except ApiException as exc:
+        if exc.status != 409:
+            raise
+    existing = apps.read_namespaced_deployment(name, manifest.namespace)
+    _assert_managed(existing, "Deployment", name)
+    body.metadata.resource_version = existing.metadata.resource_version
+    apps.replace_namespaced_deployment(name, manifest.namespace, body, field_manager=FIELD_MANAGER)
+    return AppliedResource("Deployment", name, "updated")
 
 
 def apply_service(core: client.CoreV1Api, manifest: ServiceManifest) -> AppliedResource:
@@ -117,20 +144,28 @@ def apply_service(core: client.CoreV1Api, manifest: ServiceManifest) -> AppliedR
 
 
 def preflight_ownership(clients: KubeClients, manifest: ServiceManifest) -> None:
-    """Fail before any write if a same-named Deployment or Service is not ours."""
+    """Fail before any write if a same-named object we would write is not ours."""
     _assert_allowed(manifest.namespace)
-    readers = (
-        ("Deployment", clients.apps.read_namespaced_deployment),
-        ("Service", clients.core.read_namespaced_service),
-    )
-    for kind, read in readers:
+    targets = [
+        ("Deployment", manifest.deployment_name, clients.apps.read_namespaced_deployment),
+        ("Service", manifest.name, clients.core.read_namespaced_service),
+    ]
+    if manifest.spec.service_account_name is not None:
+        targets.append(
+            (
+                "ServiceAccount",
+                manifest.spec.service_account_name,
+                clients.core.read_namespaced_service_account,
+            )
+        )
+    for kind, name, read in targets:
         try:
-            existing = read(manifest.name, manifest.namespace)
+            existing = read(name, manifest.namespace)
         except ApiException as exc:
             if exc.status == 404:
                 continue
             raise
-        _assert_managed(existing, kind, manifest.name)
+        _assert_managed(existing, kind, name)
 
 
 def deploy(
@@ -138,11 +173,34 @@ def deploy(
 ) -> list[AppliedResource]:
     namespace = ensure_namespace(clients.core, manifest.namespace, create_namespace)
     preflight_ownership(clients, manifest)
-    return [
-        namespace,
-        apply_deployment(clients.apps, manifest),
-        apply_service(clients.core, manifest),
-    ]
+    applied = [namespace]
+    # The ServiceAccount must exist before pods referencing it are created.
+    if manifest.spec.service_account_name is not None:
+        applied.append(apply_service_account(clients.core, manifest))
+    applied.append(apply_deployment(clients.apps, manifest))
+    applied.append(apply_service(clients.core, manifest))
+    return applied
+
+
+def find_overlapping_deployments(apps: client.AppsV1Api, manifest: ServiceManifest) -> list[str]:
+    """Names of other managed Deployments of this service whose selectors overlap ours.
+
+    Overlapping selectors arise when migrating an unversioned service to versioned
+    Deployments; Kubernetes permits them but documents that the controllers may conflict.
+    """
+    _assert_allowed(manifest.namespace)
+    selector = ",".join(f"{k}={v}" for k, v in labels_for(manifest).items())
+    ours = pod_labels(manifest).items()
+    overlapping = []
+    for dep in apps.list_namespaced_deployment(manifest.namespace, label_selector=selector).items:
+        if dep.metadata.name == manifest.deployment_name:
+            continue
+        template_meta = dep.spec.template.metadata
+        their_selector = (dep.spec.selector.match_labels or {}).items()
+        their_pods = ((template_meta.labels if template_meta else None) or {}).items()
+        if their_selector <= ours or ours <= their_pods:
+            overlapping.append(dep.metadata.name)
+    return sorted(overlapping)
 
 
 def rollout_complete(deployment: client.V1Deployment) -> bool:
@@ -168,14 +226,15 @@ def wait_for_rollout(
 ) -> client.V1Deployment:
     _assert_allowed(manifest.namespace)
     deadline = clock() + timeout_seconds
+    name = manifest.deployment_name
     while True:
-        deployment = apps.read_namespaced_deployment_status(manifest.name, manifest.namespace)
+        deployment = apps.read_namespaced_deployment_status(name, manifest.namespace)
         if rollout_complete(deployment):
             return deployment
         if clock() >= deadline:
             status = deployment.status
             raise RolloutTimeout(
-                f"rollout of {manifest.name!r} not complete after {timeout_seconds:.0f}s "
+                f"rollout of {name!r} not complete after {timeout_seconds:.0f}s "
                 f"(updated={status.updated_replicas or 0}, "
                 f"available={status.available_replicas or 0}, "
                 f"desired={deployment.spec.replicas})"
@@ -197,6 +256,9 @@ class ServiceStatus:
     name: str
     namespace: str
     deployed: bool
+    deployment: str = ""
+    version: str = ""
+    service_account: str = ""
     desired: int = 0
     updated: int = 0
     ready: int = 0
@@ -225,16 +287,24 @@ def _pod_status(pod: client.V1Pod) -> PodStatus:
 
 def get_status(clients: KubeClients, manifest: ServiceManifest) -> ServiceStatus:
     _assert_allowed(manifest.namespace)
-    result = ServiceStatus(name=manifest.name, namespace=manifest.namespace, deployed=False)
+    name = manifest.deployment_name
+    result = ServiceStatus(
+        name=manifest.name,
+        namespace=manifest.namespace,
+        deployed=False,
+        deployment=name,
+        version=manifest.spec.version or "",
+    )
     try:
-        dep = clients.apps.read_namespaced_deployment(manifest.name, manifest.namespace)
+        dep = clients.apps.read_namespaced_deployment(name, manifest.namespace)
     except ApiException as exc:
         if exc.status == 404:
             return result
         raise
-    _assert_managed(dep, "Deployment", manifest.name)
+    _assert_managed(dep, "Deployment", name)
     status = dep.status or client.V1DeploymentStatus()
     result.deployed = True
+    result.service_account = dep.spec.template.spec.service_account_name or "default"
     result.desired = dep.spec.replicas or 0
     result.updated = status.updated_replicas or 0
     result.ready = status.ready_replicas or 0

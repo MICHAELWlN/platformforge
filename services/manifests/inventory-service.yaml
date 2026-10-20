@@ -6,6 +6,10 @@ metadata:
 spec:
   # Built locally and loaded into kind (`make images kind-load`); not pulled from a registry.
   image: platformforge/inventory-service:0.1.0
+  # Stable track. Renders Deployment inventory-service-v0-1-0; the inventory-service Service
+  # selects every version, and Istio subsets split traffic between them (docs/CANARY_RELEASE.md).
+  version: v0.1.0
+  serviceAccountName: inventory-service
   replicas: 2
   port: 8080
   env:
@@ -31,3 +35,8 @@ spec:
       periodSeconds: 10
       timeoutSeconds: 2
       failureThreshold: 3
+  termination:
+    # preStop sleep lets endpoint removal reach every Envoy before SIGTERM; uvicorn then
+    # drains for up to 10s. 5 + 10 < 30 leaves headroom before SIGKILL.
+    gracePeriodSeconds: 30
+    preStopSleepSeconds: 5

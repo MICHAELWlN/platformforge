@@ -1,0 +1,20 @@
+# One subset per release track, selected by the version label PlatformForge renders from
+# spec.version. TLS is left to Istio auto-mTLS (ISTIO_MUTUAL between sidecars).
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: inventory-service
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/part-of: platformforge
+spec:
+  host: inventory-service.platformforge-dev.svc.cluster.local
+  # Only sidecars in this namespace see these subsets.
+  exportTo: ["."]
+  subsets:
+    - name: v0-1-0
+      labels:
+        app.kubernetes.io/version: v0.1.0
+    - name: v0-2-0
+      labels:
+        app.kubernetes.io/version: v0.2.0

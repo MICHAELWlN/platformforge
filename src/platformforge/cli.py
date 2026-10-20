@@ -12,7 +12,12 @@ from kubernetes.config.config_exception import ConfigException
 
 from platformforge import __version__, deployer, kubecontext
 from platformforge.manifest import ManifestError, ServiceManifest, load_manifest
-from platformforge.resources import build_deployment, build_service, to_dict
+from platformforge.resources import (
+    build_deployment,
+    build_service,
+    build_service_account,
+    to_dict,
+)
 
 EXIT_INVALID_MANIFEST = 1
 EXIT_CONTEXT_NOT_APPROVED = 3
@@ -87,9 +92,14 @@ def main(
 def validate(manifest: ManifestArg) -> None:
     """Validate a service manifest without contacting any cluster."""
     m = _load(manifest)
+    extras = ""
+    if m.spec.version is not None:
+        extras += f", version={m.spec.version}"
+    if m.spec.service_account_name is not None:
+        extras += f", serviceAccount={m.spec.service_account_name}"
     typer.secho(
         f"OK: {m.name} (namespace={m.namespace}, image={m.spec.image}, "
-        f"replicas={m.spec.replicas}, port={m.spec.port})",
+        f"replicas={m.spec.replicas}, port={m.spec.port}{extras})",
         fg=typer.colors.GREEN,
     )
 
@@ -114,6 +124,8 @@ def deploy(
     m = _load(manifest)
     if dry_run:
         docs = [to_dict(build_deployment(m)), to_dict(build_service(m))]
+        if m.spec.service_account_name is not None:
+            docs.insert(0, to_dict(build_service_account(m)))
         typer.echo(yaml.safe_dump_all(docs, sort_keys=False), nl=False)
         return
 
@@ -122,8 +134,16 @@ def deploy(
         applied = deployer.deploy(clients, m, create_namespace=create_namespace)
         for item in applied:
             typer.echo(f"{item.kind}/{item.name}: {item.action}")
+        for name in deployer.find_overlapping_deployments(clients.apps, m):
+            typer.secho(
+                f"warning: Deployment/{name} selects pods overlapping "
+                f"Deployment/{m.deployment_name}; remove it once the versioned "
+                "Deployment is serving",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
         if wait:
-            typer.echo(f"Waiting up to {timeout}s for rollout of {m.name}...")
+            typer.echo(f"Waiting up to {timeout}s for rollout of {m.deployment_name}...")
             dep = deployer.wait_for_rollout(clients.apps, m, timeout_seconds=timeout)
             typer.secho(
                 f"Rollout complete: {dep.status.available_replicas}/{dep.spec.replicas} available",
@@ -153,6 +173,8 @@ def status(manifest: ManifestArg, approve_context: ApproveContextOpt = None) -> 
         typer.echo(f"{st.name}: not deployed in namespace {st.namespace}")
         raise typer.Exit(code=EXIT_KUBERNETES_ERROR)
     typer.echo(f"Service:    {st.name} (namespace {st.namespace})")
+    typer.echo(f"Deployment: {st.deployment} (version {st.version or '-'})")
+    typer.echo(f"Identity:   serviceAccount {st.service_account}")
     typer.echo(f"Image:      {st.image}")
     typer.echo(
         f"Replicas:   desired={st.desired} updated={st.updated} "
