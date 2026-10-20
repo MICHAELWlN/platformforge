@@ -190,16 +190,54 @@ Istio 1.31.2 on the existing `kind-platformforge` cluster (Kubernetes v1.37.0). 
   as timeouts to 9411 and 14268 from the plaintext test client.
 - No metric-based promotion or automated rollback. The drill is still a manual manifest
   change, now visible in Prometheus.
-- Not run on GKE. No Terraform.
+- Not run on GKE. Terraform for a development cluster is written in Milestone 5 and has not been applied.
+
+## Milestone 5: GKE Terraform (not provisioned)
+
+Definitions live in `infra/terraform/`. Procedures and the cost estimate are in
+[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md), [docs/TERRAFORM.md](docs/TERRAFORM.md),
+and [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md). Evidence is in TEST_EVIDENCE.md.
+`terraform apply` has not been run. No GCP resource was created. The kind cluster was
+not modified.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Provider pin and modular root (VPC, subnet, NAT, firewall, IAM, zonal GKE, node pool, outputs) | Written | `terraform fmt -check`, `init -backend=false`, `validate` |
+| Private nodes, authorized control-plane networks, Workload Identity, least-privilege node IAM | Written | same validation; checkov 3.3.30 |
+| Apply, plan, or a live cluster | Not run | no credentialed gcloud account and no project; apply was not requested |
+| Artifact Registry and GKE workload deploy | Not started | images are still local kind loads |
+| Istio and observability on GKE | Not started | still kind-only |
+
+### Known limitations of Milestone 5
+
+- Validation does not prove the stack can be created. Preconditions that compare CIDRs
+  run at plan time, and plan was not run.
+- The control-plane endpoint is public, limited to `master_authorized_cidrs`. A private
+  endpoint is a variable, default off, because this environment has no bastion or VPN.
+- Worker egress to the internet is allowed through Cloud NAT. There is no default-deny
+  egress rule.
+- VPC flow logs are off. Checkov CKV_GCP_26 reports that.
+- Google Groups for GKE and Binary Authorization are not configured.
+- The cluster resource has no `node_config` because the default pool is removed. The
+  lasting node pool sets the GKE Metadata Server. Checkov CKV_GCP_69 fails on the
+  cluster resource and passes on the node pool.
+- One zone. The GKE free-tier credit can cover the management fee only when this is the
+  billing account's zonal or Autopilot cluster. That was not checked against a billing
+  account.
+- Local Terraform state until a private GCS bucket is approved.
+- Service type LoadBalancer is not blocked by an admission controller. PlatformForge
+  still refuses to render one. The GCE Ingress add-on is disabled.
+- `platformforge/*` images cannot be pulled by GKE until they are in a registry.
 
 ## Later milestones
 
 | Area | Status |
 | --- | --- |
-| Terraform (GCP network, GKE, Artifact Registry) | Not started. Do not start without explicit approval |
+| Terraform (VPC, Cloud NAT, zonal GKE, Workload Identity, node IAM) | **Written and statically validated.** Not applied |
+| Artifact Registry | Not started |
 | GKE workload deployment | Not started. Do not start without explicit approval |
 | Istio (STRICT mTLS, traffic management, canary) | **Verified on local kind** (Milestone 3); not on GKE |
-| OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on local kind** (Milestone 4) |
+| OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on local kind** (Milestone 4); not on GKE |
 | CD (publish images, deploy from CI) | Not started |
 | Read-only MCP server | Not started |
 | Incident simulation and rollback | Canary drill is visible in metrics, traces, and logs. No automated rollback |

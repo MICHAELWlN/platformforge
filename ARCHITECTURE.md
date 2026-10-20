@@ -1,8 +1,8 @@
 # Architecture
 
-This document describes what exists today (Milestones 1–3) and, separately, the target
-architecture. Only the first three sections are implemented, and only on a local kind
-cluster.
+This document describes what exists today. Milestones 1–4 run on a local kind cluster.
+Milestone 5 is Terraform for one GKE development environment. That configuration is
+validated and has not been applied. No GCP resources have been created.
 
 ## Milestone 1: implemented
 
@@ -260,13 +260,40 @@ namespace can read `pods` and `pods/log`. Loki, Tempo, and Grafana have no Kuber
 API permissions. Details, chart versions, and the emptyDir consequence are in
 [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 
-## Target architecture: not yet implemented
+## Milestone 5: Terraform defined, not provisioned
 
-The following are planned and **do not exist in the repository yet**:
+```
+ operator laptop (CIDR on the authorized-network list)
+      |  TLS + Google credentials
+      v
+ public control-plane endpoint (authorized networks; DNS endpoint external traffic off)
+      |
+      v
+ zonal Standard GKE control plane in us-central1-a (private nodes)
+      |
+      v
+ VPC platformforge-dev (custom mode, regional routing)
+   subnet 10.10.0.0/22
+     pods     10.20.0.0/16
+     services 10.30.0.0/20
+   worker nodes: no external IP, Cloud NAT for egress, Private Google Access
+   Workload Identity pool PROJECT.svc.id.goog
+     node SA  -> log and metric write only
+     workload SA -> no project roles; one Kubernetes SA may impersonate it
+```
 
-- Terraform-managed GCP: VPC, GKE (private nodes, Workload Identity), Artifact Registry
-- GKE workload deployment through the same CLI
-- Istio on GKE (the mesh exists only on local kind; see Milestone 3)
+Terraform in `infra/terraform/` builds that shape and nothing else. It does not install
+Istio, Prometheus, Grafana, Loki, Tempo, or Alloy, and it does not publish container
+images. Those steps stay where they are today: `istioctl`, Helm, and local `docker build`.
+Details, the public-endpoint tradeoff, and the destroy procedure are in
+[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md).
+
+## Not implemented
+
+- Applying the Terraform root, or any GCP resource
+- Artifact Registry, and therefore GKE pulls of `platformforge/*` images
+- GKE workload deployment through the CLI
+- Istio or the observability stack on GKE
 - CD (image publishing and deployment from CI)
 - Read-only MCP server for Kubernetes diagnostics
 - Metric-based canary promotion or automated rollback (the signals exist; the controller does not)

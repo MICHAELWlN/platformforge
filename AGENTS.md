@@ -22,7 +22,9 @@ Instructions for AI coding agents (Cursor, etc.) working in this repository.
 7. **Do not expose services publicly.** No NodePort, LoadBalancer, Ingress, or external IPs.
 8. **No shell-outs built from manifest values.** Use the official Kubernetes Python client.
 9. Implement incrementally, preserve existing behavior, and avoid unnecessary abstractions.
-10. Do not begin a later milestone (GKE, observability, MCP) unless asked.
+10. Do not apply `infra/terraform`, enable GCP APIs, or start the MCP server unless asked.
+    Observability on kind and the GKE Terraform definitions are already in the tree.
+    `terraform apply` and any billable create remain approval-gated.
 11. **Do not weaken the mesh.** Never switch `platformforge-dev` away from STRICT mTLS, widen
     the inventory AuthorizationPolicy, add mesh-wide policy in `istio-system`, or enable
     injection in another namespace without explicit approval. Negative tests must keep
@@ -51,7 +53,10 @@ deploy/istio/platformforge-dev/  Reviewed mesh policy: PeerAuthentication, Autho
 deploy/observability/  Helm values for Prometheus, Grafana, Loki, Tempo, Alloy; namespace;
                   Tempo NetworkPolicy; Prometheus ClusterRole; Grafana dashboard
 docs/             ISTIO.md, CANARY_RELEASE.md, INCIDENT_RUNBOOK.md, OBSERVABILITY.md,
-                  TRACING.md, OBSERVABILITY_RUNBOOK.md
+                  TRACING.md, OBSERVABILITY_RUNBOOK.md, GKE_DEPLOYMENT.md, TERRAFORM.md,
+                  CLOUD_COSTS.md
+infra/terraform/  GKE development stack (VPC, NAT, zonal Standard cluster, IAM).
+                  Validate only unless apply is explicitly approved. State is local and gitignored.
 examples/         Example ServiceManifest(s)
 tests/unit/       Fast tests; Kubernetes API is mocked
 tests/services/   Service unit tests (FastAPI TestClient, httpx MockTransport)
@@ -71,6 +76,7 @@ make images kind-load         # build arm64 0.2.0 images and load them into kind
 make images kind-load VERSION=0.1.0   # inventory 0.1.0 (stable) for the canary tests
 make integration              # PLATFORMFORGE_IT_CONTEXT=kind-platformforge pytest -m integration -v
 .tools/istio-1.31.2/bin/istioctl analyze -n platformforge-dev --context kind-platformforge  # read-only
+make terraform-validate   # fmt -check, init -backend=false, validate. Does not plan or apply.
 ```
 
 Service dependency pins live in two places and must match: `services/requirements.txt`
@@ -132,3 +138,17 @@ Service dependency pins live in two places and must match: `services/requirement
 - Telemetry disks are emptyDir. Do not add a PersistentVolume for this local lab without
   an explicit request.
 - Grafana's admin password is the chart-generated Secret. Do not write it into values or git.
+
+### GKE Terraform (Milestone 5)
+
+- The root is `infra/terraform/`. `terraform apply`, `terraform destroy`, and
+  `gcloud` commands that create or enable billable resources need explicit approval.
+  `terraform fmt`, `init -backend=false`, and `validate` do not.
+- Do not point `make integration` or any kind test at a GKE context. Automated tests
+  stay on `kind-*`.
+- This stack does not modify the local kind cluster and does not install Istio,
+  the observability charts, or Artifact Registry.
+- Do not commit `terraform.tfstate`, plan files, tfvars with operator addresses, or
+  credentials. The provider block has no key file.
+- Do not weaken STRICT mTLS, add a public Service, or open the control plane to
+  `0.0.0.0/0` to make GKE easier to reach.

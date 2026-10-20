@@ -1,0 +1,22 @@
+# Not loaded by Terraform. Copy to backend.tf only after a state bucket
+# exists. Creating that bucket is a billable change and needs approval.
+# Do not commit terraform.tfstate, and do not store the bucket's state in
+# the bucket this file points at (create the bucket outside this root).
+#
+# Bucket settings required before use:
+#   location                    = the cluster region (default us-central1)
+#   uniform_bucket_level_access = true
+#   public_access_prevention    = "enforced"
+#   versioning.enabled          = true
+#   no allUsers and no allAuthenticatedUsers bindings
+#
+# Then, from infra/terraform:
+#   terraform init -migrate-state
+# Migration copies local state. Review the plan before any apply.
+
+terraform {
+  backend "gcs" {
+    bucket = "REPLACE_WITH_APPROVED_STATE_BUCKET"
+    prefix = "platformforge/dev"
+  }
+}

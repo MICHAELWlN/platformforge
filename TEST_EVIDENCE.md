@@ -796,6 +796,123 @@ An earlier run of the same command, before the observability test printed the dr
 - Authentication on Prometheus, Loki, or Tempo.
 - GKE, Terraform, or any billable cloud resource.
 
+# Milestone 5: GKE Terraform (not provisioned)
+
+Date: 2026-10-20. No `terraform apply`, no `terraform plan`, no `terraform destroy`,
+and no `gcloud` create. The kind cluster was not contacted. No GCP resource was
+created. Application tests were not re-run; no Python or Kubernetes manifest under
+`src/`, `services/`, `deploy/`, or `tests/` was changed.
+
+## M5.1 Local tools and GCP account
+
+```
+$ terraform version
+Terraform v1.16.5
+on darwin_arm64
+
+$ gcloud version
+Google Cloud SDK 590.0.0
+
+$ gcloud auth list
+No credentialed accounts.
+
+$ gcloud config get-value project
+(unset)
+```
+
+`gcloud config list` showed only `disable_usage_reporting = True` and the active
+configuration `default`. There was no account and no project to query for GKE
+versions, quotas, or the billing catalog. GKE channel versions cited in
+`docs/GKE_DEPLOYMENT.md` are from the public release notes, not from
+`gcloud container get-server-config`.
+
+## M5.2 Format, init, validate
+
+Working directory `infra/terraform/`. Provider `hashicorp/google` 8.7.0 was
+installed by init and recorded in `.terraform.lock.hcl`.
+
+```
+$ terraform fmt -check -recursive
+(no output, exit 0)
+
+$ terraform init -backend=false -input=false
+Initializing modules...
+- iam in modules/iam
+- network in modules/network
+- gke in modules/gke
+Initializing provider plugins...
+- Finding hashicorp/google versions matching "~> 8.7"...
+- Installing hashicorp/google v8.7.0...
+- Installed hashicorp/google v8.7.0 (signed by HashiCorp)
+Terraform has been successfully initialized!
+
+$ terraform validate
+Success! The configuration is valid.
+```
+
+`init -backend=false` does not configure the local backend and does not talk to
+GCP. `validate` checks configuration and provider schema. It does not execute
+plan-time preconditions (CIDR overlap, zone inside region) and it does not
+prove the stack can be created.
+
+Earlier schema failures, fixed before the successful validate:
+
+- `google_compute_subnetwork.stack_type = "IPV4"` was rejected. The subnet
+  argument accepts `IPV4_ONLY`. The cluster's `ip_allocation_policy.stack_type`
+  remains `IPV4`, which this provider accepts.
+- `cidrcontains` is not a function in Terraform 1.16.5. Overlap is computed
+  from integer bounds.
+- `enable_autopilot = false` conflicted with `remove_default_node_pool` and
+  other Standard-only arguments. The argument is omitted. The API default is
+  Standard.
+
+## M5.3 CIDR arithmetic
+
+The overlap precondition is not executed by `validate`. The same integer bounds
+the configuration uses were evaluated in Python for the default CIDRs. Every
+pair was disjoint. `10.10.0.0/22` overlapped an injected `10.10.1.0/24`, so the
+comparison is capable of failing. `172.16.0.32/28` covered 16 addresses
+(2886729760 through 2886729775). This is not a `terraform plan`.
+
+## M5.4 Checkov
+
+checkov 3.3.30 was installed in a temporary virtualenv outside the repository
+and pointed at `infra/terraform`, skipping `.terraform`. It is not a project
+dependency.
+
+```
+Passed checks: 59, Failed checks: 4, Skipped checks: 0
+```
+
+| Check | Resource | Disposition |
+| --- | --- | --- |
+| CKV_GCP_65 Google Groups for GKE | cluster | Accepted. No Workspace domain is available. A fabricated group name would not be a real control |
+| CKV_GCP_66 Binary Authorization | cluster | Accepted. Images are unsigned and are not in a registry. Enforcement would block pods. The API is not enabled |
+| CKV_GCP_69 GKE Metadata Server | cluster | The explicit node pool sets `mode = GKE_METADATA` and was not in the failed set. The cluster resource has no `node_config` because `remove_default_node_pool` is true. Not "fixed" by adding `node_config` on a pool Terraform deletes |
+| CKV_GCP_26 subnet flow logs | subnet | Accepted. Flow logs are vended and have no free allotment. See docs/CLOUD_COSTS.md |
+
+An earlier scan, before `variables.tf` parsed and before Dataplane V2 was
+declared the way checkov expects, also failed CKV_GCP_61 (intranode
+visibility), CKV_GCP_12 (network policy), and CKV_GCP_21 (labels), and reported
+a parse error on `variables.tf` (`&&` at the start of a line). The final scan
+had no parse error. `enable_intranode_visibility = true` and
+`network_policy { enabled = false }` with `datapath_provider = ADVANCED_DATAPATH`
+cleared CKV_GCP_61 and CKV_GCP_12 without enabling the Calico add-on.
+`var.labels` cleared CKV_GCP_21 once the variables file parsed.
+
+## What Milestone 5 evidence does not show
+
+- `terraform plan` or `terraform apply`. No cluster, VPC, NAT gateway, or IAM
+  binding exists because of this change.
+- That the overlap precondition or the zone-in-region precondition pass inside
+  Terraform. Only the equivalent arithmetic was run, and only for the defaults.
+- Quotas, org policies, or the caller's IAM.
+- A price from this project's billing account. docs/CLOUD_COSTS.md is list
+  prices from public pages.
+- Istio or the observability stack on GKE.
+- Any change to the kind cluster or to the 352 passing tests recorded for
+  Milestone 4.
+
 ## What Milestone 3 evidence does not show
 
 - Anything on GKE, multi-node, or multi-cluster; only a single-node kind cluster.

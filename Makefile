@@ -5,7 +5,7 @@ PLATFORM    ?= linux/arm64
 KIND_CLUSTER ?= platformforge
 SERVICES    := inventory-service orders-service
 
-.PHONY: lint test images kind-load integration
+.PHONY: lint test images kind-load integration terraform-validate
 
 lint:
 	$(VENV)/bin/ruff check src services tests
@@ -28,3 +28,9 @@ kind-load:
 
 integration:
 	PLATFORMFORGE_IT_CONTEXT=kind-$(KIND_CLUSTER) $(VENV)/bin/pytest -m integration -v
+
+# Static checks only. Does not run terraform plan, apply, or destroy.
+terraform-validate:
+	terraform -chdir=infra/terraform fmt -check -recursive
+	terraform -chdir=infra/terraform init -backend=false -input=false
+	terraform -chdir=infra/terraform validate

@@ -4,12 +4,12 @@ PlatformForge is an internal developer platform (IDP) portfolio project. Develop
 service in a small, validated YAML manifest; the `platformforge` CLI renders it into hardened
 Kubernetes resources and deploys it into an allowlisted namespace.
 
-> **Status: Milestone 3 (CLI + two FastAPI microservices + CI + Istio service mesh).**
-> Verified against a local kind cluster only: STRICT mTLS, per-service workload identity, an
-> identity-based AuthorizationPolicy, and a 90/10 canary with a failure drill. Nothing here is
-> production-ready, and GKE, Terraform, observability, and MCP are **not implemented yet**.
-> The CI workflow has been linted and its steps replayed locally, but it has not yet run on
-> GitHub (no remote). See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+> **Status: Milestones 1–4 are verified on a local kind cluster. Milestone 5 is Terraform
+> for a dedicated GKE development environment.** The Terraform configuration has been
+> formatted and validated. It has not been applied, and no GCP resources have been created.
+> Nothing here is production-ready. MCP is not implemented. The CI workflow has been linted
+> and its steps replayed locally, but it has not yet run on GitHub (no remote). See
+> [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 ## Quick start
 
@@ -203,6 +203,19 @@ Images: multi-stage `services/Dockerfile`, build stage `python:3.13-slim-trixie`
 `gcr.io/distroless/python3-debian13:nonroot` (no shell, no package manager, UID 65532), both
 pinned by digest. Runtime dependencies are exactly pinned in `services/requirements.txt`.
 
+## GCP development environment (defined, not provisioned)
+
+`infra/terraform/` is a modular Terraform root for one zonal GKE Standard cluster in a
+dedicated VPC: private worker nodes, a public control-plane endpoint limited to named
+CIDRs, Workload Identity, a least-privilege node service account, and Cloud NAT so those
+nodes can pull images. The default location is `us-central1-a`. No load balancer is
+declared. Application Services stay ClusterIP; that rule is unchanged.
+
+Do not run `terraform apply` without explicit approval. The commands that have been run
+are format, init without a remote backend, and validate. Terraform does not install Istio
+or the observability charts. See [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md),
+[docs/TERRAFORM.md](docs/TERRAFORM.md), and [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md).
+
 ## Testing
 
 ```bash
@@ -251,6 +264,9 @@ Removing Istio itself is described in [docs/ISTIO.md](docs/ISTIO.md#cleanup-manu
 - [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): telemetry install, versions, resources
 - [docs/TRACING.md](docs/TRACING.md): W3C propagation and what spans record
 - [docs/OBSERVABILITY_RUNBOOK.md](docs/OBSERVABILITY_RUNBOOK.md): drill investigation and cleanup
+- [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md): GKE design, access, apply, and destroy
+- [docs/TERRAFORM.md](docs/TERRAFORM.md): Terraform layout, state, and commands
+- [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md): list-price estimate for the default stack
 - [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md): what is and is not implemented
 - [TEST_EVIDENCE.md](TEST_EVIDENCE.md): commands run and their results
 - [AGENTS.md](AGENTS.md): rules for AI coding agents working in this repository
