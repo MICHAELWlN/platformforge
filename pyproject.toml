@@ -20,6 +20,10 @@ dependencies = [
 dev = [
     "pytest>=9.1,<10",
     "ruff>=0.17,<0.18",
+    # Service runtime deps, matching services/requirements.txt, for service unit tests.
+    "fastapi==0.156.2",
+    "uvicorn==0.54.0",
+    "httpx==0.28.1",
 ]
 
 [project.scripts]
@@ -30,6 +34,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["services"]
 markers = [
     "integration: requires a local kind cluster; opt in with PLATFORMFORGE_IT_CONTEXT",
 ]
@@ -38,7 +43,7 @@ addopts = "-ra --strict-markers"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = ["src", "services", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "SIM"]

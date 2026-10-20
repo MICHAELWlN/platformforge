@@ -33,19 +33,32 @@ src/platformforge/
   kubecontext.py  Context discovery, display, approval, client construction
   deployer.py     Create/replace with ownership checks, rollout wait, status, logs
   cli.py          Typer CLI: validate, deploy, status, logs
+services/
+  pf_service_common/  Shared: JSON logging, request-ID middleware, health/version endpoints
+  inventory_service/  FastAPI inventory-service
+  orders_service/     FastAPI orders-service (calls inventory-service)
+  manifests/          PlatformForge ServiceManifests for both services
+  Dockerfile          Multi-stage; --target inventory-service | orders-service
+  requirements.txt    Exact runtime pins for the images
 examples/         Example ServiceManifest(s)
 tests/unit/       Fast tests; Kubernetes API is mocked
+tests/services/   Service unit tests (FastAPI TestClient, httpx MockTransport)
 tests/integration Opt-in tests against a local kind cluster
+.github/workflows CI: ruff, unit tests, image builds (no secrets, no cluster)
 ```
 
 ## Commands
 
 ```bash
 python3.13 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest                                   # unit tests
-.venv/bin/ruff check src tests && .venv/bin/ruff format --check src tests
-PLATFORMFORGE_IT_CONTEXT=kind-platformforge .venv/bin/pytest -m integration -v
+make lint                     # ruff check + format check on src, services, tests
+make test                     # unit tests (integration skipped)
+make images kind-load         # build arm64 images and load them into kind-platformforge
+make integration              # PLATFORMFORGE_IT_CONTEXT=kind-platformforge pytest -m integration -v
 ```
+
+Service dependency pins live in two places and must match: `services/requirements.txt`
+(images) and the `dev` extra in `pyproject.toml` (tests).
 
 ## Conventions
 
@@ -54,3 +67,7 @@ PLATFORMFORGE_IT_CONTEXT=kind-platformforge .venv/bin/pytest -m integration -v
   existing objects, the `app.kubernetes.io/managed-by=platformforge` label.
 - Note: kubernetes client v37 models are Pydantic-based; attribute names are snake_case
   (e.g. `spec.external_ips`, not the older `external_i_ps`).
+- Services: readiness must not depend on downstream services; upstream failures map to
+  502/503/504 per request. Never log or forward an unvalidated inbound request ID.
+- HTTP headers returned through the API server proxy are Go-canonicalized
+  (`X-Request-Id`); compare header names case-insensitively in tests.

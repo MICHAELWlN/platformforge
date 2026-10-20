@@ -1,0 +1,38 @@
+apiVersion: platformforge.dev/v1alpha1
+kind: ServiceManifest
+metadata:
+  name: orders-service
+  namespace: platformforge-dev
+spec:
+  # Built locally and loaded into kind (`make images kind-load`); not pulled from a registry.
+  image: platformforge/orders-service:0.1.0
+  replicas: 2
+  port: 8080
+  env:
+    - name: LOG_LEVEL
+      value: info
+    # Internal Kubernetes Service DNS name of inventory-service (ClusterIP, never public).
+    - name: INVENTORY_URL
+      value: http://inventory-service.platformforge-dev.svc.cluster.local:8080
+    - name: INVENTORY_TIMEOUT_SECONDS
+      value: "2"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  probes:
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 1
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
