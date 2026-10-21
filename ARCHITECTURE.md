@@ -146,9 +146,13 @@ below.
 
 ### CI
 
-`.github/workflows/ci.yml`: three jobs (Ruff, unit tests, matrix image build + smoke run).
+`.github/workflows/ci.yml` lints, tests, validates Terraform and manifests, audits
+`services/requirements.txt`, and builds both `linux/amd64` images.
 `permissions: contents: read`, actions pinned to commit SHAs, `persist-credentials: false`,
-no secrets, no cloud credentials, no cluster.
+no secrets, no cloud credentials, no cluster. Delivery is a separate manual
+workflow described in [docs/CI_CD.md](docs/CI_CD.md). Canary decisions live in
+`platformforge.delivery` and do not call the cluster
+([docs/PROGRESSIVE_DELIVERY.md](docs/PROGRESSIVE_DELIVERY.md)).
 
 ## Milestone 3: implemented (Istio service mesh, local kind)
 

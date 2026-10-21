@@ -1217,6 +1217,135 @@ TestClient deprecation. `make images-gke-publish` still exits 2.
   drill. The surviving counter used for the live test is the source sidecar's
   HTTP 500 total. Access logs remain the mTLS proof.
 
+## M6.1 CI, canary decisions, and Terraform validation
+
+Date: 2026-10-21. The GKE context was read and not modified.
+
+```
+$ gcloud container clusters describe platformforge-dev \
+    --zone us-central1-a --project platformforge-dev-mn2026 \
+    --format='value(status,currentMasterVersion,currentNodeCount)'
+RUNNING  1.36.4-gke.1391002  1
+
+$ kubectl --context gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev \
+    -n platformforge-dev get virtualservice inventory-service \
+    -o jsonpath='{range .spec.http[0].route[*]}{.destination.subset}={.weight} {end}'
+v0-1-0=100 v0-2-0=0
+```
+
+Artifact Registry repository `platformforge` in `us-central1` was still
+present. No image was pushed. `workflow_dispatch` was not started.
+`terraform apply` and `terraform plan` were not run. The kind cluster was
+not contacted.
+
+```
+$ .venv/bin/pip-audit -r services/requirements.txt --progress-spinner off
+No known vulnerabilities found
+
+$ terraform -chdir=infra/terraform init -backend=false -input=false
+$ terraform -chdir=infra/terraform validate
+Success! The configuration is valid.
+
+$ terraform -chdir=infra/terraform fmt -check -recursive
+exit 0
+
+$ make lint
+ruff check: all checks passed
+ruff format --check: 47 files already formatted
+
+$ make test
+331 passed, 64 skipped, 1 warning in 1.40s
+```
+
+The 64 skips are the 60 kind integration tests and the 4 GKE tests. New
+coverage is `tests/unit/test_delivery.py` (18) and `tests/unit/test_workflows.py`
+(5). The warning is the pre-existing Starlette `httpx` TestClient deprecation.
+
+`python -m platformforge.delivery refuse-apply` is what the delivery workflow
+runs. It was not pointed at the cluster. Trivy is configured in CI and was
+not executed in this local run.
+
+### What M6.1 does not show
+
+- A refreshed `terraform plan`.
+- A published image, a GitHub Actions run, or an OIDC token exchange.
+- A live Prometheus sample fed into `decide`.
+- An applied RoleBinding or a changed VirtualService.
+
+## M6.2 GitHub readiness and zonal IAM condition
+
+Date: 2026-10-21. Read-only checks against the existing project. No repository
+was created, no push, no `terraform plan`, no `terraform apply`, no image
+push, and no change to GKE or kind.
+
+```
+$ gh auth status
+Logged in to github.com account MICHAELWlN
+
+$ gh repo view MICHAELWlN/platformforge
+GraphQL: Could not resolve to a Repository with the name 'MICHAELWlN/platformforge'.
+
+$ git remote -v
+(no output)
+
+$ gcloud container clusters describe platformforge-dev \
+    --zone us-central1-a --project platformforge-dev-mn2026 \
+    --format='value(status,currentMasterVersion,currentNodeCount,selfLink)'
+RUNNING  1.36.4-gke.1391002  1
+https://container.googleapis.com/v1/projects/platformforge-dev-mn2026/zones/us-central1-a/clusters/platformforge-dev
+
+$ gcloud artifacts repositories describe platformforge \
+    --location us-central1 --project platformforge-dev-mn2026 \
+    --format='value(name,format)'
+projects/platformforge-dev-mn2026/locations/us-central1/repositories/platformforge  DOCKER
+
+$ gcloud iam workload-identity-pools list --location=global \
+    --project platformforge-dev-mn2026 --format='value(name)'
+projects/345366894072/locations/global/workloadIdentityPools/platformforge-dev-mn2026.svc.id.goog
+
+$ gcloud iam service-accounts list --project platformforge-dev-mn2026 \
+    --format='value(email)'
+platformforge-dev-wi@platformforge-dev-mn2026.iam.gserviceaccount.com
+platformforge-dev-nodes@platformforge-dev-mn2026.iam.gserviceaccount.com
+345366894072-compute@developer.gserviceaccount.com
+```
+
+`platformforge-dev-cd` does not exist. User-managed keys on the node and
+workload accounts: none listed. Artifact Registry IAM is only
+`roles/artifactregistry.reader` for the node service account. Billing is
+enabled. The node pool is one `e2-standard-4` with autoscaling minimum 1 and
+maximum 2. Inventory routing was still `v0-1-0=100 v0-2-0=0`. Both application
+Services are ClusterIP.
+
+Git history has no match for a private key block, a service-account
+`private_key`, an `AKIA` key, or a GitHub token. `terraform.tfstate`,
+`terraform.tfvars`, and `deploy/gke/image-lock.yaml` are ignored and are not
+in the index. `python -m platformforge.secretscan` printed `secret scan clean`.
+
+The cluster IAM condition was changed from `locations` to `zones` so it
+matches the live zonal selfLink and Google's resource-name format for a zonal
+cluster. `terraform validate` succeeded. `terraform fmt -check -recursive`
+exited 0. `terraform plan` was not run.
+
+```
+$ make lint
+ruff check: all checks passed
+ruff format --check: 49 files already formatted
+
+$ make test
+335 passed, 64 skipped, 1 warning in 1.55s
+```
+
+The 64 skips are the 60 kind integration tests and the 4 GKE tests. The
+warning is the pre-existing Starlette `httpx` TestClient deprecation.
+
+### What M6.2 does not show
+
+- A GitHub environment, a required reviewer, or a repository variable.
+- `terraform plan` or an applied Workload Identity pool.
+- A workflow run, an image push, or a token exchange.
+- Any change to cluster workloads.
+
 ## What Milestone 3 evidence does not show
 
 - Anything on GKE, multi-node, or multi-cluster; only a single-node kind cluster.

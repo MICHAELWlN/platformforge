@@ -1,0 +1,35 @@
+# Not applied. Bind this only after the delivery service account exists and a
+# person approves a change in platformforge-dev. Verbs do not include removal.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: platformforge-delivery
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/part-of: platformforge
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "destinationrules"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: platformforge-delivery
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/part-of: platformforge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: platformforge-delivery
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: platformforge-dev-cd@platformforge-dev-mn2026.iam.gserviceaccount.com

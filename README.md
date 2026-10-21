@@ -246,8 +246,13 @@ make integration                         # = PLATFORMFORGE_IT_CONTEXT=kind-platf
   `default` identity) and `pf-test-client-plain` (no sidecar), and reuse them. The tests
   never delete them.
 
-CI (`.github/workflows/ci.yml`) runs Ruff, unit tests, and both image builds with a
-read-only / no-capabilities smoke run. It uses no secrets, no cloud credentials, and no cluster.
+CI (`.github/workflows/ci.yml`) runs Ruff, unit tests, Terraform validation,
+manifest checks, a secret scan, `pip-audit`, and both `linux/amd64` image
+builds with a read-only smoke run and a Trivy scan. It uses no secrets and no
+cluster.
+`.github/workflows/delivery.yml` is manual, stays off until
+`GCP_DELIVERY_ENABLED` is set, and refuses to apply to GKE. See
+[docs/CI_CD.md](docs/CI_CD.md).
 
 Recorded results are in [TEST_EVIDENCE.md](TEST_EVIDENCE.md).
 
@@ -272,6 +277,9 @@ Removing Istio itself is described in [docs/ISTIO.md](docs/ISTIO.md#cleanup-manu
 - [docs/TRACING.md](docs/TRACING.md): W3C propagation and what spans record
 - [docs/OBSERVABILITY_RUNBOOK.md](docs/OBSERVABILITY_RUNBOOK.md): drill investigation and cleanup
 - [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md): GKE design, access, apply, and destroy
+- [docs/CI_CD.md](docs/CI_CD.md): CI jobs, GitHub OIDC, and the gated publish workflow
+- [docs/PROGRESSIVE_DELIVERY.md](docs/PROGRESSIVE_DELIVERY.md): canary decision rules
+- [docs/ROLLBACK_RUNBOOK.md](docs/ROLLBACK_RUNBOOK.md): restore the last known-good route
 - [docs/TERRAFORM.md](docs/TERRAFORM.md): Terraform layout, state, and commands
 - [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md): list-price estimate for the default stack
 - [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md): what is and is not implemented

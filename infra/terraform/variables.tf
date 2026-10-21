@@ -275,6 +275,26 @@ variable "workload_k8s_service_account" {
   }
 }
 
+variable "enable_github_delivery" {
+  description = "Create the GitHub Actions workload-identity pool and delivery service account. Default false so an ordinary apply does not change IAM."
+  type        = bool
+  default     = false
+}
+
+variable "github_repository" {
+  description = "GitHub owner/name allowed to deploy. Required only when enable_github_delivery is true. There is no default repository."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      !var.enable_github_delivery ||
+      can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository))
+    )
+    error_message = "Set github_repository to owner/name before enabling GitHub delivery."
+  }
+}
+
 variable "labels" {
   description = "GCP resource labels applied to the cluster and nodes. Replacing this variable replaces the whole map."
   type        = map(string)

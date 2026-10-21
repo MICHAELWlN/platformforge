@@ -244,6 +244,45 @@ Evidence is in TEST_EVIDENCE.md. Operations are in
 - Telemetry disks are emptyDir. A Prometheus restart drops the drill counters.
   Loki and Tempo kept the drill log and trace through the verification window.
 
+## Milestone 6: CI and progressive delivery, not applied live
+
+GitHub Actions CI now validates Terraform, ServiceManifests, and dependency
+pins, and scans built images. Canary promote/hold/rollback is a pure function
+in `src/platformforge/delivery.py`. GitHub OIDC is Terraform with
+`enable_github_delivery` defaulting to false. The delivery workflow refuses
+`kubectl apply`. No image was pushed and no GKE object was changed for this
+milestone. The cluster was read: it was `RUNNING` at `v1.36.4-gke.1391002`
+with one node, and the inventory VirtualService was `v0-1-0=100 v0-2-0=0`.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| CI lint, tests, Terraform, manifests, secret scan, pip-audit, image scan config | Written | `make lint`, `make test` 335 passed, `terraform validate`, secret scan clean |
+| GitHub OIDC and delivery IAM | Prepared, disabled | Module count is 0. Zonal IAM condition matches the live selfLink. Not applied |
+| Image publish workflow | Manual and gated by `GCP_DELIVERY_ENABLED` | `.github/workflows/delivery.yml`. Not dispatched |
+| Canary decision and idempotent rollback plan | Unit-tested | `tests/unit/test_delivery.py` |
+| Live GKE promotion | Not run | `refuse-apply` exits 2 |
+
+### Known limitations of Milestone 6
+
+- The decision function has not been fed a live Prometheus response from this
+  milestone. GKE routing was only read.
+- `terraform plan` was not run, so this pass does not claim the refreshed
+  plan is empty. The new module has `count = 0` unless the variable is set.
+- The cluster IAM condition now uses the zonal resource name
+  `projects/platformforge-dev-mn2026/zones/us-central1-a/clusters/platformforge-dev`,
+  which matches the live selfLink. It has not been applied, so the condition
+  has not been exercised by a token exchange.
+- GitHub account `MICHAELWlN` is authenticated. Repository
+  `MICHAELWlN/platformforge` does not exist and this tree has no remote.
+  `GCP_DELIVERY_ENABLED` is not set. The `gke-delivery` environment cannot
+  be protected until the repository exists.
+- `deploy/gke/delivery-rbac.yaml` is not applied, so the delivery account
+  cannot patch workloads even after OIDC exists.
+- GitHub will create environment `gke-delivery` without reviewers on first
+  use. Create the environment with required reviewers before setting
+  `GCP_DELIVERY_ENABLED`. `github_repository` stays empty until that
+  repository exists.
+
 ## Later milestones
 
 | Area | Status |
@@ -253,6 +292,6 @@ Evidence is in TEST_EVIDENCE.md. Operations are in
 | Artifact Registry | **One private repository** `platformforge` in `us-central1` |
 | Istio (STRICT mTLS, traffic management, canary) | **Verified on kind and on this GKE cluster** |
 | OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on kind and on this GKE cluster** |
-| CD (publish images, deploy from CI) | Not started. This is the next milestone |
-| Read-only MCP server | Not started |
-| Incident simulation and rollback | Manual drill verified on GKE. No automated rollback |
+| CD (publish images, deploy from CI) | **Workflow and gates written.** Publish and apply were not run |
+| Read-only MCP server | Not started. This is the next milestone |
+| Incident simulation and rollback | Manual drill verified on GKE. Automated rollback is planned and unit-tested, not executed on the cluster |

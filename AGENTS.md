@@ -68,7 +68,8 @@ tests/unit/       Fast tests; Kubernetes API is mocked
 tests/services/   Service unit tests (FastAPI TestClient, httpx MockTransport)
 tests/integration Opt-in tests against a local kind cluster (mesh.py: in-cluster client
                   pods, Envoy admin/metrics/log helpers, allowlisted mesh-file apply)
-.github/workflows CI: ruff, unit tests, image builds (no secrets, no cluster)
+.github/workflows CI plus a manual delivery workflow. CI has no cloud token.
+                  Delivery is workflow_dispatch only and refuses kubectl apply.
 .tools/           gitignored; istioctl 1.31.2 at .tools/istio-1.31.2/bin/istioctl; helm 3.22.1 at .tools/helm
 ```
 
@@ -158,6 +159,14 @@ Service dependency pins live in two places and must match: `services/requirement
 - Terraform does not modify the local kind cluster and does not install Istio, the
   observability charts, or Artifact Registry. Those were installed separately on the
   existing cluster; do not repeat that install without approval.
+- `enable_github_delivery` stays false. Do not set it, and do not dispatch
+  `.github/workflows/delivery.yml`, without an explicit approval. The delivery
+  workflow still refuses to apply manifests.
+- Do not create the GitHub repository or push this tree without an explicit
+  approval. Do not set `GCP_DELIVERY_ENABLED` until environment `gke-delivery`
+  has a required reviewer and a `main` branch rule, verified by reading the
+  environment back. The GitHub OIDC cluster condition uses the zonal resource
+  name (`zones`, project id).
 - Do not commit `terraform.tfstate`, plan files, tfvars with operator addresses, or
   credentials. The provider block has no key file.
 - Do not weaken STRICT mTLS, add a public Service, or open the control plane to

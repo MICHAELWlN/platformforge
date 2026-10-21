@@ -148,3 +148,13 @@ output "deletion_protection" {
   description = "Whether Terraform will refuse to destroy the cluster and node pool."
   value       = var.deletion_protection
 }
+
+output "github_delivery_service_account" {
+  description = "GitHub delivery service account email, or null while enable_github_delivery is false."
+  value       = try(module.github_delivery[0].service_account_email, null)
+}
+
+output "github_workload_identity_provider" {
+  description = "Workload Identity Provider resource name for GitHub Actions, or null while delivery is disabled."
+  value       = try(module.github_delivery[0].workload_identity_provider, null)
+}
