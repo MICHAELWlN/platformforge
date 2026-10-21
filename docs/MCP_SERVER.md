@@ -52,6 +52,8 @@ tools also require `namespace`: `platformforge-dev` or
 | `get_deployment_status` | Conditions and whether each image is digest-pinned |
 | `list_kubernetes_events` | Recent events in one namespace |
 | `get_service_status` | Service type, ports, ready endpoint count |
+| `get_routing` | Weights of VirtualService `inventory-service` only. Get only. `writable` is false |
+| `query_incident_metrics` | Cumulative counters and one 15-to-900-second increase. NaN is unset, not zero |
 | `query_prometheus` | One instant PromQL query, at most 20 series |
 | `query_loki` | One LogQL range over the last 15 minutes, at most 100 lines |
 | `query_tempo` | One trace by a 16- or 32-character hex id |

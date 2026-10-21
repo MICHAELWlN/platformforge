@@ -130,7 +130,7 @@ Kubernetes context:
   cluster:    kind-platformforge
   server:     https://127.0.0.1:49954
   user:       kind-platformforge
-  kubeconfig: /Users/michaelnguyen/.kube/config
+  kubeconfig: <operator kubeconfig path>
 Use Kubernetes context 'kind-platformforge'? [y/N]: error: kube context not approved; no cluster calls were made
 exit=3
 
@@ -2095,9 +2095,21 @@ Operator-verified client result after that first rollback:
 The decision JSON includes `episode_age` 30.229 seconds. That field is the
 controller episode clock. It is not a measured client recovery time. The
 26-request sample is the controller delta at that poll, separate from the
-44 client 502s. `verified_root_cause` remains null. A read-only MCP pass
-after the drill is summarized in the canvas notes for that session: route
-100/0, controller state `stable`, cumulative rollback decisions 2.
+44 client 502s. `episode_age` is not a measured end-to-end recovery time.
+
+Rollback writes the reviewed file
+`deploy/istio/platformforge-dev/inventory-virtualservice-stable.yaml`.
+That VirtualService sets subset `v0-1-0` to weight 100 and `v0-2-0` to
+weight 0. A later read showed those weights and controller state `stable`.
+The delay from the decision log to sidecar convergence was not measured on
+this drill. The controller does not redeploy inventory. The faulty canary
+Deployment stays until an operator applies the healthy manifest.
+
+`verified_root_cause` remains null. A read-only MCP pass after the drill
+read the route at 100/0 and the rollback counter at 2. `investigate_incident`
+is specified to leave `verified_root_cause` null. That session did not
+produce a successful classified report body. Logs and metrics stay
+untrusted evidence.
 
 ## Public release validation (2026-10-21)
 
@@ -2143,4 +2155,26 @@ Helper file: 4 passed. `make lint`: ruff check passed, 72 files already formatte
 `make test`: 411 passed, 70 skipped, 0 failed in 12.53s. Secret scan: `secret scan clean`.
 `git check-ignore` ignores `.cursor/mcp.json` and does not ignore
 `.cursor/mcp.example.json`.
+
+## Release-readiness docs pass (2026-10-21)
+
+No cluster command. Terraform was not planned or applied. IAM and GitHub
+Actions settings were not changed. No workflow was dispatched.
+
+```text
+make lint
+make test
+terraform fmt -check -recursive
+python -m platformforge.secretscan
+gitleaks git . --redact
+```
+
+`make lint`: ruff check passed, 72 files already formatted.
+`make test`: 411 passed, 70 skipped, 0 failed in 12.63s.
+`terraform fmt -check -recursive`: clean.
+Secret scan: `secret scan clean`.
+`gitleaks git`: 11 commits scanned, no leaks found.
+Relative links in the root markdown files and `docs/` resolved.
+GitHub Actions run 39581870193 on `150b903` had already succeeded. This
+documentation diff is not in that run.
 

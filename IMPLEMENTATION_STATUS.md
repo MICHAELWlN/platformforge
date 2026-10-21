@@ -1,7 +1,11 @@
 # Implementation Status
 
 Last updated: 2026-10-21. Status reflects only what has been executed and verified; see
-[TEST_EVIDENCE.md](TEST_EVIDENCE.md).
+[TEST_EVIDENCE.md](TEST_EVIDENCE.md). The recruiter overview is [README.md](README.md).
+
+This file is a chronological lab record. A sentence inside an early milestone
+describes that milestone. Later sections supersede it. The current summary is
+the table under [Later milestones](#later-milestones).
 
 Legend: **Verified** = implemented and exercised by passing tests (unit and/or live kind
 cluster). **Not started** = no code exists.
@@ -188,8 +192,8 @@ Istio 1.31.2 on the existing `kind-platformforge` cluster (Kubernetes v1.37.0). 
   `spec.version`. Inventory versions are labeled.
 - Tempo's Service still lists Jaeger ports. NetworkPolicy drops them; that was observed
   as timeouts to 9411 and 14268 from the plaintext test client.
-- No metric-based promotion or automated rollback. The drill is still a manual manifest
-  change, now visible in Prometheus.
+- No metric-based promotion or automated rollback in this milestone. The drill is still a manual manifest
+  change, now visible in Prometheus. Milestone 8 later added the controller.
 - The Milestone 4 test run itself was on kind. The same stack was later installed on GKE; that evidence is Milestone 5.
 
 ## Milestone 5: GKE cluster with the platform installed
@@ -250,8 +254,8 @@ GitHub Actions CI now validates Terraform, ServiceManifests, and dependency
 pins, and scans built images. Canary promote/hold/rollback is a pure function
 in `src/platformforge/delivery.py`. GitHub OIDC is Terraform with
 `enable_github_delivery` defaulting to false. The delivery workflow refuses
-`kubectl apply`. No image was pushed and no GKE object was changed for this
-milestone. The cluster was read: it was `RUNNING` at `v1.36.4-gke.1391002`
+`kubectl apply`. A later manual dispatch published image `0.2.0` and did not
+change the running Deployment digests. The cluster was read: it was `RUNNING` at `v1.36.4-gke.1391002`
 with one node, and the inventory VirtualService was `v0-1-0=100 v0-2-0=0`.
 
 | Item | Status | Evidence |
@@ -283,8 +287,11 @@ with one node, and the inventory VirtualService was `v0-1-0=100 v0-2-0=0`.
 
 ## Milestone 7A: read-only MCP server, not connected live
 
-`src/platformforge/mcp_server/` is a stdio MCP server on `mcp` 2.3.0. Twelve
-tools list or read Kubernetes objects and loopback telemetry. Unit tests use
+`src/platformforge/mcp_server/` is a stdio MCP server on `mcp` 2.3.0. This
+milestone registered twelve tools. Two tools were added later, `get_routing`
+and `query_incident_metrics`, so the server now registers 14. The kind and
+GKE live checks in 7B and 7C covered the original twelve. `get_routing` was
+read on GKE afterward. `query_incident_metrics` is unit-tested. Unit tests use
 fakes. This pass did not start a long-running server, did not port-forward,
 and did not call the GKE or kind API.
 
@@ -378,7 +385,7 @@ not deleted. GitHub Actions was not changed.
 
 - The live decision's p95 fields were null. A later 300s histogram query
   computed p95, and that query was not the rollback input.
-- GKE routing was not analyzed or changed.
+- GKE routing was not analyzed or changed in this drill. The controller section records the later GKE rollback.
 
 ## Milestone 8 controller: kind reconciliation loop
 

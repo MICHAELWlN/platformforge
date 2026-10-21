@@ -1,56 +1,124 @@
 # PlatformForge
 
-PlatformForge is an internal developer platform portfolio project. A developer
-describes a service in a small YAML manifest. The CLI validates it and renders
-a hardened Kubernetes Deployment, ServiceAccount, and ClusterIP Service in one
-allowlisted namespace. Those services are running on a private zonal Google
-Kubernetes Engine cluster with Istio, a canary controller, and a read-only
-investigation API.
+PlatformForge is a small internal developer platform. A service is described
+in a validated YAML manifest. The CLI renders a hardened Kubernetes
+Deployment, ServiceAccount, and ClusterIP Service into one allowlisted
+namespace. The same two services, Istio, a canary controller, and a read-only
+investigation API were verified on a private zonal GKE cluster on
+2026-10-21.
 
-This is a single-node development cluster. It is a working demonstration, and
-it is not a production platform. Current scope is in
-[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
-
-## Read this in 60 seconds
-
-- **Real GKE deployment.** Cluster `platformforge-dev` in `us-central1-a`
-  (`v1.36.4-gke.1391002`): one private `e2-standard-4` node, Cloud NAT, and
-  Workload Identity. Workload images are immutable Artifact Registry digests.
-- **Automated rollback.** The canary controller compares stable and canary
-  Prometheus samples and writes a reviewed 100/0 VirtualService when the
-  canary error rate crosses its threshold.
-- **Least-privilege Kubernetes RBAC.** The controller may get two named
-  Deployments and get or update one named VirtualService. The MCP reader may
-  read pods, logs, events, and Deployments in `platformforge-dev`, and may
-  get only `virtualservices/inventory-service`.
-- **Workload Identity Federation.** GitHub Actions authenticates to Google
-  with OIDC. CI has no service-account JSON key.
-- **GitHub Actions stops before apply.** The delivery workflow is manual and
-  review-gated. It can publish a digest. It then refuses to apply manifests.
-- **Observability.** Prometheus, Grafana, Loki, Tempo, and Alloy run as
-  ClusterIP services. Application traces go to Tempo. Pod logs go to Loki.
-- **AI-assisted investigation.** A stdio MCP server reads Kubernetes,
-  Prometheus, Loki, and Tempo. `verified_root_cause` stays null.
-- **Reproducible experiments.** Kind has a five-experiment controller loop.
-  GKE has the recorded faulty-canary drill below.
-
-Inventory routing on the cluster is 100 percent `v0.1.0` and 0 percent
-`v0.2.0`. A Cursor session has called the MCP server against GKE, including
-the rejection checks. `get_routing` read weights 100 and 0.
+It is a single-node lab, not a production platform. Leaving the cluster up
+creates cloud charges until it is destroyed.
 
 ## Demo video
 
-> **Final demo URL:** `TODO_FINAL_DEMO_VIDEO_URL`
+> **Demo video:** `TODO_FINAL_DEMO_VIDEO_URL`
 
-Replace `TODO_FINAL_DEMO_VIDEO_URL` with the published recording. The shot
-list is [docs/FINAL_DEMO.md](docs/FINAL_DEMO.md). The spoken script is
-[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
+The recording is not published yet. Replace that token with the URL. The
+shot list is [docs/FINAL_DEMO.md](docs/FINAL_DEMO.md). The spoken script is
+[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md). There are no screenshots in the
+repository. The Grafana UI was not captured; datasource health was checked
+through the HTTP API.
 
-## Measured GKE failure
+## Key engineering achievements
+
+- **GKE lab, privately networked.** Zonal Standard cluster
+  `platformforge-dev` in `us-central1-a` (`v1.36.4-gke.1391002`), one private
+  `e2-standard-4`, Cloud NAT, and Workload Identity. Workload images are
+  Artifact Registry digests.
+- **Routing rollback, measured.** The canary controller compares Prometheus
+  samples and writes a reviewed 100/0 VirtualService when the canary error
+  ratio crosses 0.05. It does not deploy or delete workloads.
+- **Least-privilege RBAC.** The controller may get two named Deployments and
+  get or update one named VirtualService. The MCP reader may read pods, logs,
+  events, and Deployments in `platformforge-dev`, and may get only
+  `virtualservices/inventory-service`.
+- **Workload Identity Federation.** GitHub Actions authenticates to Google
+  with OIDC. There is no service-account JSON key in CI.
+- **CI validates. Delivery publishes and stops.** The manual delivery
+  workflow can push a digest. It then refuses to apply manifests.
+- **STRICT mesh and private telemetry.** Istio mTLS, an inventory
+  AuthorizationPolicy, and Prometheus, Grafana, Loki, Tempo, and Alloy on
+  ClusterIP only.
+- **Read-only investigation.** Fourteen stdio MCP tools. `verified_root_cause`
+  stays null.
+
+Inventory routing at the last check was 100 percent `v0.1.0` and 0 percent
+`v0.2.0`.
+
+## Architecture overview
+
+```text
+ServiceManifest
+    -> platformforge CLI (validate, render; deploy is kind-only)
+    -> Deployment + ServiceAccount + ClusterIP
+         platformforge-dev
+            Istio sidecar, STRICT mTLS
+            orders-service -> inventory-service v0.1.0 | v0.2.0
+            canary-controller reads Prometheus, writes a reviewed route
+         platformforge-observability
+            Prometheus, Grafana, Loki, Tempo, Alloy (no sidecar, emptyDir)
+laptop
+    stdio MCP -> short-lived reader token + loopback telemetry
+```
+
+```text
+src/platformforge/          CLI, deployer, canary controller, MCP server
+services/                   inventory-service and orders-service
+deploy/istio/               reviewed mesh policy
+deploy/observability/       Prometheus values and the Grafana dashboard
+deploy/gke/                 GKE controller and MCP reader
+deploy/kind/                kind controller and MCP reader
+infra/terraform/            VPC, NAT, zonal GKE, IAM, GitHub OIDC
+.github/workflows/          CI and the manual delivery workflow
+scripts/demo/               local demo helpers
+docs/                       install, incident, and evidence write-ups
+```
+
+Component detail is in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Technologies
+
+| Area | Stack |
+| --- | --- |
+| Services | Python 3.13, FastAPI, OpenTelemetry, distroless non-root images |
+| Kubernetes | kind for the local lab; GKE Standard 1.36 for the cloud lab |
+| Mesh | Istio 1.31.2, sidecar mode, CNI, STRICT mTLS |
+| Cloud | Terraform, Cloud NAT, Workload Identity, Artifact Registry, GitHub OIDC |
+| CI | GitHub Actions, Ruff, pytest, `pip-audit`, Trivy |
+| Telemetry | Prometheus, Grafana, Loki, Tempo, Alloy |
+| Investigation | MCP over stdio, 14 read-only tools |
+
+## End-to-end reliability workflow
+
+1. A developer changes service code or a ServiceManifest.
+2. GitHub Actions CI lints, runs unit tests, validates Terraform and
+   manifests, scans for secrets, audits pins, and builds both `linux/amd64`
+   images. CI has no cloud token and no cluster.
+3. A reviewer can dispatch delivery. Workload Identity Federation pushes an
+   image digest to the existing Artifact Registry repository.
+4. The same workflow then runs `python -m platformforge.delivery refuse-apply`.
+   GitHub Actions does not deploy workloads. A human applies rendered YAML
+   with `kubectl` on the pinned GKE context. `platformforge deploy` accepts
+   only `kind-*` contexts.
+5. An operator applies the reviewed 90/10 VirtualService to start a canary.
+   The controller does not select that file and does not start a deployment.
+6. Prometheus scrapes Istio request metrics and the controller `/metrics`
+   endpoint. The controller stores a baseline on the first 90/10 read.
+7. If the canary error ratio rises above 0.05, or latency regresses past the
+   configured gates, the controller replaces the route with the reviewed
+   stable VirtualService. Missing telemetry through the 120 second window
+   also rolls the route back.
+8. Grafana is provisioned with the service dashboard. The measured drill
+   checked Grafana's HTTP health, not a browser session.
+9. An operator can point a stdio MCP client at Kubernetes, Prometheus, Loki,
+   and Tempo. The server is read-only. `verified_root_cause` stays null.
+
+## Measured incident experiment
 
 On 2026-10-21 a faulty inventory canary (`INVENTORY_FAILURE_PERCENT=100`)
-took a share of live orders traffic on the pinned GKE cluster. The client
-sent 400 requests:
+received a share of live orders traffic on the pinned GKE cluster. The
+client sent 400 requests:
 
 | Result | Count |
 | --- | --- |
@@ -58,272 +126,199 @@ sent 400 requests:
 | HTTP 502 | 44 |
 | Total | 400 |
 
-The controller's own sample at the decision was 26 canary errors out of 26
+The controller's sample at the decision was 26 canary errors out of 26
 canary requests, an error ratio of 100 percent. It recorded action
 `rollback`. The resulting controller state was `stable`. The cumulative
 rollback counter increased from 1 to 2.
 
-That decision JSON includes `episode_age` of 30.229 seconds. The field is
-the controller's episode clock. Client recovery time was not measured from
-it. The 26-request sample is the controller's scraped delta at that poll.
-It is a separate count from the 44 client 502s.
+The decision JSON includes `episode_age` of 30.229 seconds. That field is
+the controller's episode clock. It is not a measured end-to-end recovery
+duration. The 26-request sample is the scraped delta at that poll. It is a
+separate count from the 44 client 502s.
 
-`verified_root_cause` remains null. The tools can show which version
-returned the errors and that a rollback was logged. They do not certify a
-cause.
+**How routing was restored.** The controller wrote the reviewed file
+`deploy/istio/platformforge-dev/inventory-virtualservice-stable.yaml`. That
+VirtualService keeps subset `v0-1-0` at weight 100 and subset `v0-2-0` at
+weight 0. Istio programs the caller sidecars from that object. A later read
+showed weights 100 and 0. The time from the decision to sidecar convergence
+was not measured on this drill. The controller did not roll the inventory
+Deployment. The faulty canary process stays in place until an operator
+applies the healthy manifest. Stable inventory continued to serve the
+successful requests.
 
-An earlier drill on the same cluster used a different sample: 363 HTTP 200
-and 37 HTTP 502 at the client, a controller sample of 16/16, and a rollback
-counter moving from 0 to 1. That run is written up in
-[docs/GKE_CANARY_EXPERIMENT.md](docs/GKE_CANARY_EXPERIMENT.md).
+An earlier drill on the same cluster, with a different sample, is in
+[docs/GKE_CANARY_EXPERIMENT.md](docs/GKE_CANARY_EXPERIMENT.md): 363 HTTP 200,
+37 HTTP 502, a controller sample of 16/16, and a rollback counter moving
+from 0 to 1. Do not mix those timings with this drill.
 
-## Architecture
+**MCP investigation.** The server exposes 14 read-only tools: `list_pods`,
+`describe_pod`, `get_pod_logs`, `list_deployments`, `get_deployment_status`,
+`list_kubernetes_events`, `get_service_status`, `get_routing`,
+`query_incident_metrics`, `query_prometheus`, `query_loki`, `query_tempo`,
+`get_service_health`, and `investigate_incident`. A read-only pass after
+this drill saw the route at 100/0 and the rollback counter at 2.
+`verified_root_cause` remains null. That pass did not return a successful
+`investigate_incident` report body. Logs and metrics are untrusted. The
+tools can show which version returned errors and that a rollback was logged.
+They do not certify why.
 
-```text
-ServiceManifest YAML
-        |
-        v
-platformforge CLI  ---- kind only ---->  Deployment, ServiceAccount, ClusterIP
-        |
-        v
-namespace platformforge-dev  (restricted Pod Security, Istio sidecar)
-   orders-service  --mTLS-->  inventory-service
-                              stable v0.1.0  |  canary v0.2.0
-                              reviewed VirtualService weights
-   canary-controller  --reads Prometheus-->  writes stable or promote route
+## Security architecture
 
-namespace platformforge-observability  (no sidecar, ClusterIP, emptyDir)
-   Prometheus   Grafana   Loki   Tempo   Alloy
+- Manifests reject unknown fields, credential-like environment names,
+  `:latest`, and any Service other than ClusterIP.
+- The namespace allowlist is code: `platformforge-dev` only. Existing objects
+  must carry `app.kubernetes.io/managed-by=platformforge`.
+- Rendered pods are non-root, drop all capabilities, use a read-only root
+  filesystem, and set `seccompProfile: RuntimeDefault`. The namespace
+  enforces restricted Pod Security.
+- Istio STRICT mTLS stays on. `inventory-service` allows the
+  `orders-service` identity, and only `GET /inventory/*` on port 8080.
+  SPIFFE identity comes from `serviceAccountName`, which must equal the
+  manifest name.
+- The observability namespace is not injected. Telemetry Services are
+  ClusterIP. Disks are emptyDir.
+- Controller and MCP identities are namespace Roles. No ClusterRoleBinding
+  is attached to either ServiceAccount. The MCP server has no HTTP transport
+  and does not open port-forwards.
+- GitHub delivery uses Workload Identity Federation bound to repository
+  `MICHAELWlN/platformforge`, ref `main`, and environment `gke-delivery`.
+- CI runs `python -m platformforge.secretscan`. Built images are scanned
+  with Trivy. Terraform state, tfvars, plan files, kubeconfigs, private
+  keys, and `deploy/gke/image-lock.yaml` are gitignored.
 
-laptop
-   stdio MCP server
-        reader kubeconfig (short-lived token) + loopback telemetry ports
-```
-
-| Piece | Where |
-| --- | --- |
-| CLI, schema, deployer, canary controller, MCP server | `src/platformforge/` |
-| `inventory-service` and `orders-service` | `services/` |
-| Reviewed mesh policy | `deploy/istio/platformforge-dev/` |
-| Prometheus, Grafana, Loki, Tempo, Alloy | `deploy/observability/` |
-| GKE controller and MCP reader | `deploy/gke/` |
-| Kind controller and MCP reader | `deploy/kind/` |
-| VPC, NAT, zonal GKE, IAM, GitHub OIDC | `infra/terraform/` |
-| CI and manual delivery | `.github/workflows/` |
-
-The component narrative is [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## GKE infrastructure
-
-Terraform in `infra/terraform/` describes one zonal Standard cluster in a
-custom VPC: private nodes, a public control plane limited to named CIDRs,
-Workload Identity, a least-privilege node service account, and Cloud NAT.
-No load balancer is declared. Application Services stay ClusterIP.
-
-What is running:
-
-| Item | Value |
-| --- | --- |
-| Project / cluster / zone | `platformforge-dev-mn2026` / `platformforge-dev` / `us-central1-a` |
-| Version | `v1.36.4-gke.1391002`, one `e2-standard-4`, `linux/amd64` |
-| Registry | `us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge` |
-| Istio | 1.31.2, sidecar mode, CNI, no ingress or egress gateway |
-| Controller image | `canary-controller@sha256:b7e8af0a35fd1d968ee3aacf701701e15da8ff600d6360662885f6c5846cc6a2` |
-
-`platformforge deploy` refuses any kube context that does not start with
-`kind-`. GKE installs were `kubectl`, `istioctl`, and Helm against the pinned
-context
-`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`. Real image
-digests for the app images live in gitignored `deploy/gke/image-lock.yaml`.
-Layout and operations: [docs/TERRAFORM.md](docs/TERRAFORM.md),
-[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md),
-[docs/GKE_OPERATIONS.md](docs/GKE_OPERATIONS.md).
-
-## GitHub Actions
+## CI/CD architecture
 
 `.github/workflows/ci.yml` runs on pull requests and on pushes to `main`.
-It lints, runs unit tests, validates Terraform, checks manifests, scans for
-secrets, runs `pip-audit`, and builds both `linux/amd64` images with a
-non-root smoke run and a Trivy scan. It has no cloud token and no cluster.
+Permissions are `contents: read`. Actions are pinned to commit SHAs.
 
 `.github/workflows/delivery.yml` is `workflow_dispatch` only. Environment
 `gke-delivery` requires a reviewer and allows only `main`. The publish job
-uses Workload Identity Federation to push a digest to the existing Artifact
-Registry repository. The next job checks the pinned project, cluster, and
-context, then runs `python -m platformforge.delivery refuse-apply`. One
-approved `0.2.0` publish succeeded. That publish did not roll the cluster.
-A later dispatch still needs the reviewer. See [docs/CI_CD.md](docs/CI_CD.md).
+uses OIDC. The gate job checks the pinned project, cluster, and context,
+then refuses apply. One approved `0.2.0` publish succeeded (Actions run
+39546044442) and did not roll the cluster. A later dispatch still needs the
+reviewer.
 
-## Istio service mesh
-
-In `platformforge-dev`:
-
-- **STRICT mTLS.** Sidecar-to-sidecar traffic is TLSv1.3. SPIFFE identity is
-  `spiffe://cluster.local/ns/platformforge-dev/sa/<service>`. Plaintext from
-  a pod outside the mesh is rejected.
-- **Authorization.** `inventory-service` accepts the `orders-service`
-  identity, and only `GET /inventory/*` on port 8080.
-- **Canary subsets.** DestinationRule subsets `v0-1-0` and `v0-2-0`. Reviewed
-  VirtualServices set 100/0 (stable), 90/10 (canary), or 0/100 (promote).
-
-`serviceAccountName` must equal the manifest name, because that name is the
-SPIFFE identity. PlatformForge does not render Istio objects. Mesh files are
-reviewed YAML under `deploy/istio/platformforge-dev/`. Install and checks:
-[docs/ISTIO.md](docs/ISTIO.md).
-
-## Canary controller
-
-`platformforge.canary_controller` polls every 15 seconds. On GKE the
-Deployment is digest-pinned, runs as UID 65532, and is not injected with a
-sidecar. Prometheus job `platformforge-canary` scrapes its ClusterIP.
-
-The process does not select the 90/10 file. An operator applies that file to
-start a shift. The first successful read of 90/10 stores a Prometheus
-baseline and holds. Later polls use the increase since that baseline.
-
-On the running GKE Deployment the gates are:
-
-| Condition | Route write |
-| --- | --- |
-| Weights already 100/0 | None. The episode resets |
-| Canary error ratio above 0.05 | Reviewed stable file, 100/0 |
-| p95 regression above 5 and a gap above 200 ms | Reviewed stable file |
-| Missing telemetry through the 120 second window | Reviewed stable file |
-| At least 10 canary requests inside the thresholds | Reviewed promote file, 0/100 |
-
-GKE also requires `PLATFORMFORGE_CANARY_GKE=1` and the pod service-account
-token. Setting the kind context variable on GKE does not authorize a write.
-The controller cannot delete `inventory-service-v0-1-0`. Kind experiments:
-[docs/CANARY_CONTROLLER.md](docs/CANARY_CONTROLLER.md). Decision rules:
-[docs/AUTOMATED_CANARY.md](docs/AUTOMATED_CANARY.md) and
-[docs/AUTOMATED_ROLLBACK.md](docs/AUTOMATED_ROLLBACK.md).
-
-## Prometheus, Grafana, Loki, and Tempo
-
-The telemetry stack lives in `platformforge-observability` with
-`istio-injection=disabled`. Prometheus scrapes Istio sidecar metrics on port
-15020 and the controller's `/metrics`. Alloy tails `platformforge-dev` pod
-logs into Loki. Both FastAPI services export OTLP traces to Tempo when
-`OTEL_EXPORTER_OTLP_ENDPOINT` is set. A failed export does not fail the
-request. Spans do not record bodies, headers, or credentials.
-
-Grafana is provisioned with those datasources and the dashboard
-`PlatformForge services` (`platformforge-overview`). On GKE, Grafana
-`/api/health` returned database ok for version 13.2.4, and the three
-datasource health checks returned HTTP 200. The browser UI was not used for
-that check, and the admin password is the chart-generated Secret.
-
-Disks are emptyDir. There is no PersistentVolume. Nothing in this stack is
-NodePort, LoadBalancer, or Ingress. Port-forward to `127.0.0.1` is a local
-debug step. Details: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) and
-[docs/TRACING.md](docs/TRACING.md).
-
-## Read-only MCP investigation
-
-`python -m platformforge.mcp_server` is a stdio server. It has no HTTP
-transport. Live reads use a kubeconfig whose user is
-`platformforge-mcp-reader`. Kind and GKE each have their own token. A GKE
-call without `PLATFORMFORGE_MCP_KUBECONFIG` is rejected. Telemetry URLs are
-loopback HTTP only. The server does not open port-forwards.
-
-Logs and metrics are untrusted data. The server does not execute
-instructions found in them. `investigate_incident` keeps `verified_root_cause`
-null. `get_routing` is a get of one named VirtualService and reports
-`writable: false`.
-
-Tool behavior, redaction, and the live checks:
-[docs/MCP_SERVER.md](docs/MCP_SERVER.md),
-[docs/MCP_SECURITY.md](docs/MCP_SECURITY.md),
-[docs/MCP_INCIDENT_INVESTIGATION.md](docs/MCP_INCIDENT_INVESTIGATION.md),
-[docs/MCP_GKE_INTEGRATION.md](docs/MCP_GKE_INTEGRATION.md).
-
-## Security controls
-
-- Manifests reject unknown fields, credential-like environment names,
-  `:latest`, and any Service that is not ClusterIP.
-- The namespace allowlist is code: `platformforge-dev` only.
-- Rendered pods are non-root, drop all capabilities, use a read-only root
-  filesystem, and set `seccompProfile: RuntimeDefault`.
-- The namespace enforces the restricted Pod Security profile.
-- Istio STRICT and the inventory AuthorizationPolicy stay in place for
-  telemetry. The observability namespace is not injected.
-- Controller and MCP identities are namespace Roles with named-resource
-  limits on the VirtualService. No ClusterRoleBinding is attached to either
-  ServiceAccount.
-- GitHub delivery uses Workload Identity Federation bound to `main`,
-  repository `MICHAELWlN/platformforge`, and environment `gke-delivery`.
-- CI runs `python -m platformforge.secretscan`. Built images are scanned with Trivy.
-- Terraform state, tfvars, plan files, kubeconfigs, and the image lock are
-  gitignored. The provider block has no key file.
+The latest CI run on `main`, [39581870193](https://github.com/MICHAELWlN/platformforge/actions/runs/39581870193),
+completed successfully for commit `150b903`. Documentation edits after that
+commit are not part of that run. See [docs/CI_CD.md](docs/CI_CD.md).
 
 ## Testing and validation
 
 ```bash
-make lint          # ruff check + format check
-make test          # unit tests; kind and GKE tests stay skipped
-make terraform-validate
+make lint
+make test                 # unit tests; kind and GKE tests stay skipped
+make terraform-validate   # fmt, init -backend=false, validate; no plan or apply
 python -m platformforge.secretscan
 ```
 
-`make integration` is opt-in and runs only when the current context is
-`kind-platformforge`. `make mcp-gke` and `pytest -m gke` are the pinned GKE
-context only. Recorded commands are in [TEST_EVIDENCE.md](TEST_EVIDENCE.md).
+`make integration` runs only when the current context is `kind-platformforge`.
+`make mcp-gke` and `pytest -m gke` use the pinned GKE context only.
+
+Local `make test` on 2026-10-21: 411 passed, 70 skipped, 0 failed. Those
+skipped tests are the live kind and GKE checks. Recorded commands are in
+[TEST_EVIDENCE.md](TEST_EVIDENCE.md).
+
+| Capability | Code | Unit tests | kind | GKE |
+| --- | --- | --- | --- | --- |
+| CLI deploy into `platformforge-dev` | Yes | Yes | Yes | CLI refuses the context |
+| inventory and orders services | Yes | Yes | Yes | Installed from digests |
+| STRICT mTLS and inventory authorization | Reviewed YAML | Policy tests | Yes | Yes |
+| Prometheus, Grafana, Loki, Tempo, Alloy | Helm values | Partial | Yes | API health checked; UI not opened |
+| Canary controller | Yes | Yes | Five experiments, including promote | Error rollback measured; promote and latency drill not run |
+| GitHub Actions CI | Yes | Workflow tests | Not used | Not used |
+| Image publish | Yes | Yes | Not used | One `0.2.0` publish; apply refused |
+| MCP, 14 tools | Yes | Yes | Original 12 live; kind `get_routing` rule not applied | Original 12 live, plus `get_routing` |
+
+## Local reproduction
+
+Prerequisites: Python 3.13, Docker, kind, kubectl, and make. No cloud
+account is required for the unit tests.
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+source .venv/bin/activate
+make lint
+make test
+platformforge validate examples/demo-web.yaml
+platformforge deploy examples/demo-web.yaml --dry-run
+```
+
+A kind cluster, Istio, and the telemetry charts are separate installs.
+Follow [docs/ISTIO.md](docs/ISTIO.md) and [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+`make images kind-load` builds `linux/arm64` images for kind. Integration
+tests do not delete the client pods or the namespace. Do not point them at
+GKE.
+
+Copy `.cursor/mcp.example.json` to gitignored `.cursor/mcp.json` before using
+the MCP server in Cursor. The example has no token. The reader kubeconfig
+belongs in `/tmp`, mode `0600`, and is not committed.
+
+## Cloud deployment
+
+Cloud resources cost money for as long as they exist.
+[docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md) is a list-price estimate from
+2026-10-20, not an invoice: about $108 per month for one on-demand
+`e2-standard-4`, a 50 GB boot disk, and Cloud NAT when the GKE management
+free tier covers the billing account, or about $181 per month when it does
+not. Artifact Registry storage is outside that estimate. A budget alert does
+not stop spend. There is no scale-to-zero schedule.
+
+`terraform apply`, `terraform destroy`, and `gcloud` commands that create
+resources need an explicit approval. `make terraform-validate` does not
+create anything.
+
+```bash
+make terraform-validate
+```
+
+Copy `infra/terraform/terraform.tfvars.example` to the gitignored
+`terraform.tfvars` and set the operator CIDR there. Do not commit tfvars,
+Terraform state, plan files, kubeconfigs, or service-account keys.
+
+`platformforge deploy` will not target the GKE context. The verified install
+used `kubectl`, `istioctl`, and Helm on
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`. Procedure:
+[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md) and
+[docs/GKE_OPERATIONS.md](docs/GKE_OPERATIONS.md). Teardown is manual and is
+documented in the same deployment guide. This repository does not run it.
 
 ## Known limitations
 
-- `platformforge deploy` refuses the GKE context. Re-deploys there are
-  `kubectl apply` of rendered YAML on the pinned context.
-- The delivery workflow refuses apply. Publishing a digest does not roll a
-  Deployment.
-- The controller does not start the 90/10 shift. Promotion of the GKE canary
-  to 100 percent has not been done.
-- `verified_root_cause` stays null on every investigation.
-- Controller counters reset when the pod is replaced.
-- The GKE latency drill is not measured. The running inventory digest does
-  not set `INVENTORY_DELAY_MS`.
-- Telemetry uses emptyDir. A Prometheus restart drops the in-memory TSDB.
-- One zonal node. A preemption or a disruptive upgrade takes the mesh with it.
-- The MCP operator still mints the reader token and opens the port-forwards.
-- No license file is in the repository yet.
+- GitHub Actions refuses to apply manifests. Publishing a digest does not
+  roll a Deployment.
+- The controller does not start the 90/10 shift and does not deploy pods.
+  The GKE canary was not promoted to 100 percent. The GKE latency drill was
+  not measured.
+- `episode_age` is not recovery time. Client recovery time was not measured
+  for the 400-request drill.
+- `verified_root_cause` stays null. The MCP operator still mints the reader
+  token and opens the port-forwards.
+- Controller counters reset when the pod is replaced. Telemetry disks are
+  emptyDir.
+- One zonal node. A preemption or a disruptive upgrade takes the lab with it.
+- The demo video URL and screenshots are not in the repository.
+- No license file is committed.
 
-## Demo
+## Documentation
 
-The four-minute path does not inject a failure. With the kube context already
-pinned to the GKE cluster:
+- [ARCHITECTURE.md](ARCHITECTURE.md): components, data flow, trust boundaries
+- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md): chronological record of what was verified
+- [TEST_EVIDENCE.md](TEST_EVIDENCE.md): commands and results
+- [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md): GKE design, access, and destroy
+- [docs/GKE_OPERATIONS.md](docs/GKE_OPERATIONS.md): what was installed on the cluster
+- [docs/GKE_CANARY_EXPERIMENT.md](docs/GKE_CANARY_EXPERIMENT.md): the earlier measured rollback
+- [docs/CANARY_CONTROLLER.md](docs/CANARY_CONTROLLER.md): kind reconciliation loop
+- [docs/CI_CD.md](docs/CI_CD.md): CI jobs and the gated publish workflow
+- [docs/ISTIO.md](docs/ISTIO.md): mesh install and verification
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md): telemetry install
+- [docs/MCP_SERVER.md](docs/MCP_SERVER.md): the 14 read-only tools
+- [docs/MCP_SECURITY.md](docs/MCP_SECURITY.md): allowlists and redaction
+- [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md): list-price estimate
+- [docs/FINAL_DEMO.md](docs/FINAL_DEMO.md): recording procedure
 
-```bash
-make demo-preflight
-make demo-reader
-make demo-connect
-make demo-controller
-```
-
-`make demo-connect` keeps Prometheus, Loki, Tempo, and Grafana on loopback
-and restarts a forward that dies. Grafana is `http://127.0.0.1:3000`,
-dashboard `PlatformForge services`. Sign in locally. Do not put the admin
-password in a recording. Stop the forwards with `make demo-connect-stop`.
-
-A live failure changes the canary and the route. It needs a fresh approval
-and the `CONFIRM_*` switches documented in
-[docs/FINAL_DEMO.md](docs/FINAL_DEMO.md). Recovery notes:
-[docs/DEMO_TROUBLESHOOTING.md](docs/DEMO_TROUBLESHOOTING.md). The recording
-checklist is [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md).
-
-## Cleanup and cost
-
-The cluster is running and it bills while it exists. [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md)
-is a list-price estimate from 2026-10-20, not an invoice: about **$108 per
-month** for one on-demand `e2-standard-4`, a 50 GB boot disk, and Cloud NAT
-when the GKE management free tier covers this account, or about **$181 per
-month** when it does not. That page does not include Artifact Registry
-storage. A budget alert does not stop spend. There is no scale-to-zero
-schedule.
-
-`terraform destroy`, deleting the namespace, and deleting the kind cluster
-are manual and need an explicit approval. This repository does not run them.
-Kind cleanup, when you intend it, is the namespace delete in
-[docs/ISTIO.md](docs/ISTIO.md). GKE teardown is
-[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md).
+The operator reference below has the manifest schema, command exit codes, and
+local kind procedures. The full doc index is at the end of that reference.
 
 ## Reference
 
@@ -492,8 +487,8 @@ CNI plugin, so `platformforge-dev` keeps the `restricted` Pod Security level. In
 - **Authorization**: `inventory-service` accepts only the `orders-service` identity, and only
   for `GET /inventory/*` on port 8080. Other identities get `403 RBAC: access denied`.
 - **Canary**: `inventory-service` v0.1.0 and v0.2.0 run side by side. A DestinationRule
-  defines subsets, and one of two reviewed VirtualServices sets the weights (100/0 stable,
-  90/10 canary).
+  defines subsets, and a reviewed VirtualService sets the weights (100/0 stable,
+  90/10 canary, or 0/100 promote).
 
 Install commands, configuration files, and verification: [docs/ISTIO.md](docs/ISTIO.md).
 Release and rollback procedure: [docs/CANARY_RELEASE.md](docs/CANARY_RELEASE.md). Failure
@@ -530,7 +525,7 @@ CIDRs, Workload Identity, a least-privilege node service account, and Cloud NAT 
 nodes can pull images. The default location is `us-central1-a`. No load balancer is
 declared. Application Services stay ClusterIP; that rule is unchanged.
 
-The cluster `platformforge-dev` (`v1.36.4-gke.1391002`) is running with Istio 1.31.2,
+On 2026-10-21 the cluster `platformforge-dev` (`v1.36.4-gke.1391002`) was verified with Istio 1.31.2,
 STRICT mTLS, the 100/0 stable inventory route, and Prometheus, Grafana, Loki, Tempo, and
 Alloy. Images are `linux/amd64` digests in Artifact Registry
 `us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge`. The real digests are
