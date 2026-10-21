@@ -16,9 +16,54 @@ creates cloud charges until it is destroyed.
 
 The recording is not published yet. Replace that token with the URL. The
 shot list is [docs/FINAL_DEMO.md](docs/FINAL_DEMO.md). The spoken script is
-[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md). There are no screenshots in the
-repository. The Grafana UI was not captured; datasource health was checked
-through the HTTP API.
+[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
+
+## Demonstration evidence
+
+The inventory failure in these views was injected
+(`INVENTORY_FAILURE_PERCENT=100`). The canary controller then rolled the
+route back by itself. The MCP server only read the result.
+`verified_root_cause` stays null. The Actions run published images and did
+not deploy workloads.
+
+### Grafana rollback dashboard
+
+![Grafana dashboard after the canary rollback](docs/assets/grafana-canary-rollback.png)
+
+PlatformForge services, after the injected failure. The cumulative rollback
+counter is 2. The controller error-ratio series reaches 100 percent, which
+is the 26 errors out of 26 canary requests. Traffic is back on `v0.1.0`.
+The rollout-state figures are controller gauge samples, not request counts.
+
+### MCP routing and metrics
+
+![Read-only MCP routing and incident metrics](docs/assets/mcp-routing-metrics.png)
+
+Read-only MCP output for `inventory-service`. The VirtualService is subset
+`v0-1-0` at weight 100 and subset `v0-2-0` at weight 0. A 300-second
+`query_incident_metrics` window shows `v0.2.0` at a 5xx ratio of 1.0. Those
+totals are Prometheus `increase()` extrapolations, not integer request
+counts. This read does not set `verified_root_cause`.
+
+### MCP controller rollback investigation
+
+![Read-only MCP view of the controller rollback](docs/assets/mcp-rollback-investigation.png)
+
+Read-only view of the controller log. The process rollback counter is 2.
+The untrusted log records action `rollback`, error ratio 1.0, and 26 errors
+out of 26 canary requests, with resulting state `stable`. `episode_age`
+30.229 seconds is the controller episode clock, not a measured recovery
+time. `verified_root_cause` stays null.
+
+### GitHub Actions delivery
+
+![Successful manual GitHub Actions delivery run](docs/assets/github-actions-delivery.png)
+
+Manual `workflow_dispatch` run
+[39546044442](https://github.com/MICHAELWlN/platformforge/actions/runs/39546044442)
+on `main`. The publish jobs wrote `inventory-service` and `orders-service`
+digests. The delivery gate completed successfully and did not apply
+workloads to the cluster.
 
 ## Key engineering achievements
 
@@ -297,7 +342,7 @@ documented in the same deployment guide. This repository does not run it.
 - Controller counters reset when the pod is replaced. Telemetry disks are
   emptyDir.
 - One zonal node. A preemption or a disruptive upgrade takes the lab with it.
-- The demo video URL and screenshots are not in the repository.
+- The demo video URL is not in the repository yet.
 - No license file is committed.
 
 ## Documentation
