@@ -36,3 +36,31 @@ infra/terraform/*.auto.tfvars
 !infra/terraform/terraform.tfvars.example
 # Real image digests are written here after a registry publish. The example stays tracked.
 deploy/gke/image-lock.yaml
+
+# Any tfvars, not only the root file. Examples stay tracked.
+*.tfvars
+!*.tfvars.example
+
+# Private keys, tokens, and local credential files
+*.pem
+*.p12
+*.pfx
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+credentials.json
+*-credentials.json
+*service-account*.json
+*kubeconfig*
+
+# Generated recordings and local caches
+recordings/
+*.mp4
+*.mov
+*.webm
+*.mkv
+.mypy_cache/
+.cache/
+.cursor/

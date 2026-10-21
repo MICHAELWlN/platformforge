@@ -1,9 +1,9 @@
 # Cloud costs
 
-Nothing in this estimate was provisioned. There is no confirmed charge.
-The figures below are published list prices, read on 2026-10-20, multiplied
-by 730 hours (24 × 365 / 12). A negotiated contract, a tax, or a later price
-change is not included. E2 VMs have no automatic sustained-use discount. No
+The cluster in this estimate is running. The figures below are published list
+prices, read on 2026-10-20, multiplied by 730 hours (24 × 365 / 12). They are
+not an invoice. A negotiated contract, a tax, or a later price change is not
+included. E2 VMs have no automatic sustained-use discount. No
 committed-use discount is assumed.
 
 The Cloud Billing Catalog was not queried. An earlier check that day had no
@@ -109,7 +109,7 @@ is another $3.65 at this list price.
 | --- | --- |
 | Load balancers | No forwarding rule, Ingress, or Gateway. The HTTP load-balancing add-on is disabled. A later `Service` of type `LoadBalancer` would add a forwarding-rule SKU; this root does not create one |
 | Extra persistent disks | Boot disks only. The platform's metrics, logs, and traces use emptyDir |
-| Artifact Registry, KMS, Binary Authorization, Filestore, Backup for GKE | Not in the configuration |
+| Artifact Registry, KMS, Binary Authorization, Filestore, Backup for GKE | Artifact Registry is not declared in this Terraform root. A private `platformforge` repository exists, and its storage is outside this estimate. KMS, Binary Authorization, Filestore, and Backup for GKE are not in the configuration |
 | Managed Service for Prometheus | `managed_prometheus.enabled = false` |
 | VPC flow logs | Off. They are vended logs at $0.25/GiB with no free allotment, plus generation charges. Checkov CKV_GCP_26 reports the gap |
 | Workload Cloud Logging | `logging_config` is `SYSTEM_COMPONENTS` only. Application logs stay in the cluster (Loki) after that stack is installed by Helm |

@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from platformforge.mcp_server.correlate import spans_from_tempo
 from platformforge.mcp_server.policy import (
     MAX_HTTP_BYTES,
     MAX_LOKI_LINES,
@@ -155,11 +156,13 @@ def query_tempo(
         raise
     batches = payload.get("batches")
     count = len(batches) if isinstance(batches, list) else 0
+    spans = spans_from_tempo(payload)
     return {
         "source": "tempo",
         "telemetry": "present" if count else "missing",
         "trace_id": trace,
         "batches": count,
+        "spans": spans,
     }
 
 

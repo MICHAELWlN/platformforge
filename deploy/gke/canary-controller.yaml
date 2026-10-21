@@ -1,0 +1,157 @@
+# GKE canary controller. The digest is the linux/amd64 image published to the
+# existing Artifact Registry repository. image-pushed: true
+# This ServiceAccount can get two inventory Deployments and update one
+# VirtualService. It cannot delete, exec, read Secrets, or leave platformforge-dev.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platformforge-canary-controller
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/name: canary-controller
+    app.kubernetes.io/part-of: platformforge
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: platformforge-canary-controller
+  namespace: platformforge-dev
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["inventory-service-v0-1-0", "inventory-service-v0-2-0"]
+    verbs: ["get"]
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices"]
+    resourceNames: ["inventory-service"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: platformforge-canary-controller
+  namespace: platformforge-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: platformforge-canary-controller
+subjects:
+  - kind: ServiceAccount
+    name: platformforge-canary-controller
+    namespace: platformforge-dev
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-controller
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/name: canary-controller
+    app.kubernetes.io/part-of: platformforge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: canary-controller
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary-controller
+  namespace: platformforge-dev
+  labels:
+    app.kubernetes.io/name: canary-controller
+    app.kubernetes.io/part-of: platformforge
+    app.kubernetes.io/managed-by: platformforge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: canary-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: canary-controller
+        app.kubernetes.io/part-of: platformforge
+        app.kubernetes.io/managed-by: platformforge
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: platformforge-canary-controller
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: canary-controller
+          image: us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge/canary-controller@sha256:b7e8af0a35fd1d968ee3aacf701701e15da8ff600d6360662885f6c5846cc6a2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 8080
+          env:
+            - name: PLATFORMFORGE_CANARY_IN_CLUSTER
+              value: "1"
+            - name: PLATFORMFORGE_CANARY_GKE
+              value: "1"
+            - name: PLATFORMFORGE_CANARY_CONTEXT
+              value: gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev
+            - name: PLATFORMFORGE_CANARY_NAMESPACE
+              value: platformforge-dev
+            - name: PLATFORMFORGE_PROMETHEUS_URL
+              value: http://prometheus-server.platformforge-observability.svc.cluster.local
+            - name: PLATFORMFORGE_CANARY_POLL_SECONDS
+              value: "15"
+            - name: PLATFORMFORGE_CANARY_WINDOW_SECONDS
+              value: "120"
+            - name: PLATFORMFORGE_CANARY_MAX_EPISODE_SECONDS
+              value: "180"
+            - name: PLATFORMFORGE_CANARY_METRICS_HOST
+              value: "0.0.0.0"
+            - name: PLATFORMFORGE_CANARY_METRICS_PORT
+              value: "8080"
+            - name: PLATFORMFORGE_CANARY_MIN_REQUESTS
+              value: "10"
+            - name: PLATFORMFORGE_CANARY_MAX_ERROR_RATIO
+              value: "0.05"
+            - name: PLATFORMFORGE_CANARY_MAX_P95_REGRESSION
+              value: "5"
+            - name: PLATFORMFORGE_CANARY_MIN_P95_DELTA_MS
+              value: "200"
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

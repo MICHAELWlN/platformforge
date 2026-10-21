@@ -305,6 +305,8 @@ def test_mcp_registers_read_only_tools() -> None:
         "get_deployment_status",
         "list_kubernetes_events",
         "get_service_status",
+        "get_routing",
+        "query_incident_metrics",
         "query_prometheus",
         "query_loki",
         "query_tempo",
@@ -386,6 +388,7 @@ def test_gke_reader_kubeconfig_is_accepted(
     monkeypatch.setattr("kubernetes.config.new_client_from_config", _fake)
     monkeypatch.setattr("kubernetes.client.CoreV1Api", lambda api: api)
     monkeypatch.setattr("kubernetes.client.AppsV1Api", lambda api: api)
+    monkeypatch.setattr("kubernetes.client.CustomObjectsApi", lambda api: api)
     clients = kube_read.load_clients_for(GKE_CONTEXT)
     assert seen["context"] == GKE_CONTEXT
     assert seen["persist_config"] is False
@@ -420,3 +423,337 @@ def test_server_module_does_not_listen() -> None:
     assert "streamable-http" not in source
     assert "read_namespaced_secret" not in source
     assert "subprocess" not in source
+
+
+def test_routing_read_is_get_only_and_rejects_other_namespaces() -> None:
+    body = {
+        "spec": {
+            "http": [
+                {
+                    "route": [
+                        {"destination": {"subset": "v0-1-0"}, "weight": 100},
+                        {"destination": {"subset": "v0-2-0"}, "weight": 0},
+                    ]
+                }
+            ]
+        }
+    }
+
+    class Custom:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_namespaced_custom_object(self, *_args: object, **_kwargs: object) -> dict:
+            self.calls.append("get_namespaced_custom_object")
+            return body
+
+        def create_namespaced_custom_object(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("create was invoked")
+
+        def patch_namespaced_custom_object(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("patch was invoked")
+
+        def replace_namespaced_custom_object(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("replace was invoked")
+
+        def delete_namespaced_custom_object(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("delete was invoked")
+
+    custom = Custom()
+    route = kube_read.get_routing(custom, NAMESPACE)
+    assert route["stable_subset"] == "v0-1-0"
+    assert route["canary_subset"] == "v0-2-0"
+    assert route["stable_weight"] == 100
+    assert route["canary_weight"] == 0
+    assert route["writable"] is False
+    assert custom.calls == ["get_namespaced_custom_object"]
+    view = kube_read.ReadOnlyApi(custom)
+    for name in (
+        "create_namespaced_custom_object",
+        "patch_namespaced_custom_object",
+        "replace_namespaced_custom_object",
+        "delete_namespaced_custom_object",
+    ):
+        with pytest.raises(McpError, match="refuses"):
+            getattr(view, name)
+    with pytest.raises(McpError, match="platformforge-dev"):
+        kube_read.get_routing(custom, "platformforge-observability")
+    with pytest.raises(McpError, match="not allowlisted"):
+        kube_read.get_routing(custom, "kube-system")
+    custom.get_namespaced_custom_object = lambda *_a, **_k: {"spec": {}}  # type: ignore[method-assign]
+    with pytest.raises(McpError, match="reviewed inventory route"):
+        kube_read.get_routing(custom, NAMESPACE)
+
+
+def test_incident_window_separates_counters_and_does_not_treat_nan_as_zero() -> None:
+    from platformforge.mcp_server.incident import query_incident_metrics
+
+    def fetch(url: str, _timeout: float) -> bytes:
+        if "error_ratio" in url or "latency_regression" in url:
+            return _vector([{"metric": {"__name__": "gauge"}, "value": [1, "NaN"]}])
+        if "canary_state" in url:
+            return _vector([{"metric": {"state": "stable"}, "value": [1, "5"]}])
+        if "decisions_total" in url and "increase" in url:
+            return _vector([{"metric": {"action": "rollback"}, "value": [1, "1"]}])
+        if "decisions_total" in url:
+            return _vector(
+                [
+                    {"metric": {"action": "rollback"}, "value": [1, "1"]},
+                    {"metric": {"action": "hold"}, "value": [1, "3"]},
+                ]
+            )
+        if "rollbacks_total" in url:
+            return _vector([{"metric": {}, "value": [1, "1"]}])
+        if "duration_milliseconds_bucket" in url:
+            return _vector([])
+        if "increase" in url:
+            return _vector(
+                [
+                    {
+                        "metric": {"destination_version": "v0.2.0", "response_code": "500"},
+                        "value": [1, "16"],
+                    },
+                    {
+                        "metric": {"destination_version": "v0.2.0", "response_code": "200"},
+                        "value": [1, "0"],
+                    },
+                    {
+                        "metric": {"destination_version": "v0.1.0", "response_code": "200"},
+                        "value": [1, "20"],
+                    },
+                ]
+            )
+        return _vector(
+            [
+                {
+                    "metric": {"destination_version": "v0.2.0", "response_code": "500"},
+                    "value": [1, "63"],
+                },
+                {
+                    "metric": {"destination_version": "v0.1.0", "response_code": "200"},
+                    "value": [1, "821"],
+                },
+            ]
+        )
+
+    report = query_incident_metrics(
+        "inventory-service", 120, base_url="http://127.0.0.1:9090", fetch=fetch
+    )
+    assert report["verified_root_cause"] is None
+    cumulative = report["cumulative_counters"]["versions"]
+    windowed = report["windowed_increases"]["versions"]
+    assert report["cumulative_counters"]["kind"] == "cumulative_counter"
+    assert cumulative[1]["destination_version"] == "v0.2.0"
+    assert cumulative[1]["total"] == 63
+    canary = next(row for row in windowed if row["destination_version"] == "v0.2.0")
+    assert report["windowed_increases"]["kind"] == "windowed_increase"
+    assert canary["http_5xx_ratio"] == 1.0
+    assert canary["total"] == 16
+    assert report["rollbacks"]["value"] == 1
+    assert report["rollbacks"]["kind"] == "cumulative_counter"
+    assert report["error_ratio"]["sample"] == "unset"
+    assert report["error_ratio"]["value"] is None
+    assert "not zero" in report["error_ratio"]["note"]
+    assert report["state"]["state_label"] == "stable"
+    assert report["state"]["value"] == 5
+    assert report["latency_p95"]["sample"] == "missing"
+    with pytest.raises(McpError, match="15 to 900"):
+        query_incident_metrics("inventory-service", 99999, base_url="http://127.0.0.1:9090")
+    missing = query_incident_metrics("inventory-service", 120, base_url="")
+    assert missing["telemetry"] == "missing"
+
+
+def test_correlation_uses_only_ids_and_statuses_that_were_returned() -> None:
+    from platformforge.mcp_server.correlate import correlate_evidence, spans_from_tempo
+
+    trace = "ab" * 16
+    text = (
+        '{"request_id": "gke-recover-1", "trace_id": "' + trace + '"}\n'
+        '{"action": "rollback", "event": "decision", "reason": "canary error rate above threshold",'
+        ' "error_ratio": 1.0, "canary_errors": 16, "canary_total": 16, "episode_age": 15.184}\n'
+    )
+    payload = {
+        "batches": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": "inventory-service"}},
+                        {"key": "service.version", "value": {"stringValue": "v0.2.0"}},
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "spans": [
+                            {
+                                "name": "GET",
+                                "attributes": [
+                                    {"key": "http.status_code", "value": {"intValue": 500}}
+                                ],
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+    spans = spans_from_tempo(payload)
+    assert spans[0]["http_status"] == "500"
+    assert spans[0]["version"] == "v0.2.0"
+    assert spans[0]["service"] == "inventory-service"
+    report = correlate_evidence(
+        texts=[text, "no identifiers here"],
+        tempo={"telemetry": "present", "spans": spans, "batches": 1},
+        routing={"stable_weight": 100, "canary_weight": 0},
+        metrics={
+            "telemetry": "present",
+            "cumulative_counters": {
+                "kind": "cumulative_counter",
+                "sample": "present",
+                "versions": [
+                    {
+                        "destination_version": "v0.2.0",
+                        "http_5xx_ratio": 1,
+                        "errors": 63,
+                        "total": 63,
+                        "sample": "present",
+                    }
+                ],
+            },
+            "windowed_increases": {
+                "kind": "windowed_increase",
+                "sample": "present",
+                "versions": [
+                    {
+                        "destination_version": "v0.2.0",
+                        "http_5xx_ratio": 1.0,
+                        "errors": 16,
+                        "total": 16,
+                        "sample": "present",
+                    }
+                ],
+            },
+            "error_ratio": {"sample": "unset", "note": "NaN is not zero"},
+            "latency_regression": {"sample": "missing", "note": "no series"},
+        },
+    )
+    assert report["verified_root_cause"] is None
+    assert report["request_ids"] == ["gke-recover-1"]
+    assert report["trace_ids"] == [trace]
+    assert any("v0-1-0=100" in item for item in report["facts"])
+    assert any("http_status=500" in item for item in report["facts"])
+    assert any("Unverified hypothesis" in item for item in report["hypotheses"])
+    assert any("NaN is not zero" in item for item in report["missing"])
+    empty = correlate_evidence(texts=["started"], tempo=None, routing=None, metrics=None)
+    assert empty["request_ids"] == []
+    assert empty["trace_ids"] == []
+    assert empty["verified_root_cause"] is None
+    assert any("not a healthy zero" in item for item in empty["missing"])
+    assert "af7c43c78feb106200ac2f8131a8cc83" not in json.dumps(empty)
+
+
+def test_reader_manifest_allows_only_get_on_the_inventory_virtualservice() -> None:
+    import yaml
+
+    root = __import__("pathlib").Path(__file__).resolve().parents[2]
+    for relative in ("deploy/gke/mcp-reader.yaml", "deploy/kind/mcp-reader.yaml"):
+        docs = list(yaml.safe_load_all((root / relative).read_text(encoding="utf-8")))
+        role = next(doc for doc in docs if doc["kind"] == "Role")
+        rules = role["rules"]
+        virtual = [rule for rule in rules if "virtualservices" in rule["resources"]]
+        assert len(virtual) == 1
+        assert virtual[0]["verbs"] == ["get"]
+        assert virtual[0]["resourceNames"] == ["inventory-service"]
+        assert virtual[0]["apiGroups"] == ["networking.istio.io"]
+        for rule in rules:
+            assert "delete" not in rule["verbs"]
+            assert "create" not in rule["verbs"]
+            assert "update" not in rule["verbs"]
+            assert "patch" not in rule["verbs"]
+
+
+def test_dashboard_queries_use_exposed_metrics_and_call_nan_unset() -> None:
+    dashboard = json.loads(
+        (
+            __import__("pathlib").Path(__file__).resolve().parents[2]
+            / "deploy/observability/dashboards/platformforge.json"
+        ).read_text(encoding="utf-8")
+    )
+    allowed = (
+        "istio_requests_total",
+        "istio_request_duration_milliseconds_bucket",
+        "up{",
+        "platformforge_canary_rollbacks_total",
+        "platformforge_canary_state",
+        "platformforge_canary_error_ratio",
+        "platformforge_canary_latency_regression",
+        "platformforge_canary_decisions_total",
+    )
+    titles = set()
+    for panel in dashboard["panels"]:
+        titles.add(panel["title"])
+        for target in panel["targets"]:
+            assert any(name in target["expr"] for name in allowed), target["expr"]
+    assert "Canary versus stable error rate" in titles
+    assert "Canary rollbacks" in titles
+    assert "Canary rollout state" in titles
+    blob = json.dumps(dashboard)
+    assert "NaN means this gauge is unset" in blob
+
+
+def test_mcp_rejects_unauthorized_context_namespace_and_log_window() -> None:
+    from mcp import Client
+
+    from platformforge.mcp_server.server import build_server
+
+    class Guard:
+        def get_routing(self, context: str, namespace: str) -> dict[str, object]:
+            require_context(context)
+            require_namespace(namespace)
+            if namespace != NAMESPACE:
+                raise McpError("inventory routing is only readable in platformforge-dev")
+            return {"stable_weight": 100, "canary_weight": 0}
+
+        def get_pod_logs(self, context: str, namespace: str, pod: str, *_args: object) -> dict:
+            require_context(context)
+            require_namespace(namespace)
+            since_seconds = _args[-1] if _args else None
+            require_since(since_seconds if isinstance(since_seconds, int) else None)
+            return {"logs": {"text": "unused"}}
+
+        def incident_metrics(self, service: str, window_seconds: int) -> dict[str, object]:
+            from platformforge.mcp_server.incident import query_incident_metrics
+
+            return query_incident_metrics(service, window_seconds, base_url="")
+
+    async def scenario() -> None:
+        async with Client(build_server(Guard())) as client:
+            context = await client.call_tool(
+                "get_routing", {"context": "gke-other", "namespace": NAMESPACE}
+            )
+            system = await client.call_tool(
+                "get_routing", {"context": GKE_CONTEXT, "namespace": "kube-system"}
+            )
+            logs = await client.call_tool(
+                "get_pod_logs",
+                {
+                    "context": CONTEXT,
+                    "namespace": NAMESPACE,
+                    "pod": "canary-controller-0",
+                    "since_seconds": 99999,
+                },
+            )
+            window = await client.call_tool(
+                "query_incident_metrics",
+                {"context": CONTEXT, "service": "inventory-service", "window_seconds": 5},
+            )
+            assert context.is_error is True
+            assert system.is_error is True
+            assert logs.is_error is True
+            assert window.is_error is True
+
+    asyncio.run(scenario())
+
+
+def _vector(rows: list[dict[str, object]]) -> bytes:
+    body = {"status": "success", "data": {"resultType": "vector", "result": rows}}
+    return json.dumps(body).encode()

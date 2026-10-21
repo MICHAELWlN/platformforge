@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 from kubernetes.client import ApiException
 
+from platformforge.canary import CanaryError
+from platformforge.canary_controller import parse_weights
 from platformforge.gke import GKE_CONTEXT
 from platformforge.kubecontext import KubeClients, load_clients
 from platformforge.mcp_server.policy import (
@@ -76,7 +78,11 @@ def load_clients_for(context: str) -> KubeClients:
         context=context,
         persist_config=False,
     )
-    return KubeClients(core=client.CoreV1Api(api), apps=client.AppsV1Api(api))
+    return KubeClients(
+        core=client.CoreV1Api(api),
+        apps=client.AppsV1Api(api),
+        custom=client.CustomObjectsApi(api),
+    )
 
 
 def _kubeconfig_user(path: str, context: str) -> str:
@@ -206,6 +212,48 @@ def get_service_status(core: Any, namespace: str, name: str) -> dict[str, object
         "ready_addresses": _ready_addresses(endpoints),
         "public": service_type in {"LoadBalancer", "NodePort"},
         "note": "Call the Service DNS name. A pod IP bypasses STRICT mTLS.",
+    }
+
+
+_ROUTE_NAME = "inventory-service"
+_ROUTE_GROUP = ("networking.istio.io", "v1", "virtualservices")
+
+
+def get_routing(custom: Any, namespace: str) -> dict[str, object]:
+    """Read the inventory VirtualService. The only API method used is get."""
+    namespace = require_namespace(namespace)
+    if namespace != "platformforge-dev":
+        raise McpError("inventory routing is only readable in platformforge-dev")
+    view = ReadOnlyApi(custom)
+    group, version, plural = _ROUTE_GROUP
+    body = _invoke(
+        view,
+        "get_namespaced_custom_object",
+        group,
+        version,
+        namespace,
+        plural,
+        _ROUTE_NAME,
+        _request_timeout=_TIMEOUT,
+    )
+    if not isinstance(body, dict):
+        raise McpError("virtualservice response was not a mapping")
+    try:
+        stable, canary = parse_weights(body)
+    except CanaryError as exc:
+        raise McpError("virtualservice shape is not the reviewed inventory route") from exc
+    return {
+        "namespace": namespace,
+        "name": _ROUTE_NAME,
+        "stable_subset": "v0-1-0",
+        "canary_subset": "v0-2-0",
+        "stable_weight": stable,
+        "canary_weight": canary,
+        "destinations": [
+            {"subset": "v0-1-0", "weight": stable, "role": "stable"},
+            {"subset": "v0-2-0", "weight": canary, "role": "canary"},
+        ],
+        "writable": False,
     }
 
 

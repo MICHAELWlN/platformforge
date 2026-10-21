@@ -26,6 +26,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list"]
+  # get only. Do not apply this file to the kind cluster unless that update is approved.
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices"]
+    resourceNames: ["inventory-service"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

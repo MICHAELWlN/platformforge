@@ -8,7 +8,7 @@ SERVICES    := inventory-service orders-service
 GKE_CONTEXT ?= gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev
 GKE_REGISTRY ?= us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge
 
-.PHONY: lint test images kind-load images-gke images-gke-publish gke-preflight integration mcp-live mcp-gke terraform-validate
+.PHONY: lint test images kind-load images-gke images-gke-publish gke-preflight integration mcp-live mcp-gke canary-kind canary-controller-kind terraform-validate demo-preflight demo-forwards demo-reader demo-controller demo-evidence demo-stop demo-connect demo-connect-status demo-connect-stop
 
 lint:
 	$(VENV)/bin/ruff check src services tests
@@ -58,6 +58,46 @@ mcp-live:
 # Does not contact kind or change workloads.
 mcp-gke:
 	PLATFORMFORGE_MCP_GKE=1 $(VENV)/bin/pytest tests/integration/test_mcp_gke.py -v
+
+# Opt-in kind drill. Deploys the faulty canary, then restores the healthy one.
+# Refuses every context other than kind-platformforge.
+canary-kind:
+	PLATFORMFORGE_CANARY_IT=1 $(VENV)/bin/pytest tests/integration/test_canary_kind.py -v -s
+
+# Opt-in. The controller Deployment must already be ready on kind-platformforge.
+# Does not build the image and does not run the one-shot drill.
+canary-controller-kind:
+	PLATFORMFORGE_CANARY_IT=1 $(VENV)/bin/pytest tests/integration/test_canary_controller_kind.py -v -s
+
+# Read-only demo helpers. Failure injection and route restore stay behind
+# CONFIRM_FAILURE and CONFIRM_RESTORE in scripts/demo and are not Make targets.
+demo-preflight:
+	./scripts/demo/preflight.sh
+
+demo-forwards:
+	./scripts/demo/port-forwards.sh
+
+demo-reader:
+	./scripts/demo/reader-token.sh
+
+demo-controller:
+	./scripts/demo/controller-ready.sh
+
+demo-evidence:
+	./scripts/demo/collect-evidence.sh
+
+demo-stop:
+	./scripts/demo/stop-forwards.sh
+
+# Local supervisor for the recording port-forwards. Does not change the cluster.
+demo-connect:
+	./scripts/demo/connect.sh start
+
+demo-connect-status:
+	./scripts/demo/connect.sh status
+
+demo-connect-stop:
+	./scripts/demo/connect.sh stop
 
 # Static checks only. Does not run terraform plan, apply, or destroy.
 terraform-validate:

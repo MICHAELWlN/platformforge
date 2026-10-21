@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-10-20. Status reflects only what has been executed and verified; see
+Last updated: 2026-10-21. Status reflects only what has been executed and verified; see
 [TEST_EVIDENCE.md](TEST_EVIDENCE.md).
 
 Legend: **Verified** = implemented and exercised by passing tests (unit and/or live kind
@@ -356,6 +356,58 @@ Routing stayed `v0-1-0=100`, `v0-2-0=0`.
 - No request id or trace id joins the retained HTTP 500 counter to one span.
 - The reader cannot list `platformforge-observability` or `istio-system`.
 
+## Milestone 8: canary analysis and kind rollback
+
+`platformforge.canary` compares stable and canary Prometheus samples and
+returns promote, hold, or rollback. `platformforge.canary_apply` replaces the
+inventory VirtualService from the reviewed 100/0 or 90/10 file. It accepts
+only `kind-platformforge` and `platformforge-dev`. The stable Deployment is
+not deleted. GitHub Actions was not changed.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Thresholds, parsing, timeouts, transitions | Verified | `tests/unit/test_canary.py` |
+| Kind failure drill | Verified | `tests/integration/test_canary_kind.py`, 1 passed in 28.68s |
+| Canary 5xx ratio in the decision | 1.0 on `v0.2.0` | 60s `increase` of `istio_requests_total` |
+| Route recovery | 1.158s to sidecar weight 100 | Then 30/30 HTTP 200 while the canary was still faulty |
+| Healthy canary restored | `INVENTORY_FAILURE_PERCENT=0`, weights 100/0 | `finally` in the same test |
+| Grafana panels | Kind ConfigMap updated | GKE ConfigMap was not changed |
+| In-process canary counters | Rendered as text | Not scraped by cluster Prometheus |
+
+### Known limitations of the one-shot drill
+
+- The live decision's p95 fields were null. A later 300s histogram query
+  computed p95, and that query was not the rollback input.
+- GKE routing was not analyzed or changed.
+
+## Milestone 8 controller: kind reconciliation loop
+
+`platformforge.canary_controller` polls on `kind-platformforge`, compares
+counter deltas since a baseline, and applies the reviewed stable or promote
+VirtualService. It serves `GET /metrics`. Prometheus job `platformforge-canary`
+scrapes that ClusterIP. This section records the kind loop. The GKE
+Deployment is the digest-pinned manifest in `deploy/gke/canary-controller.yaml`.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| State machine, baseline, shutdown, metrics port | Verified | `tests/unit/test_canary_controller.py` |
+| Five kind experiments | Verified | 1 passed in 335.84s. See `docs/CANARY_CONTROLLER.md` |
+| Healthy 90/10 | promote | 400 × HTTP 200, canary total 56, p95 regression 0.031, then sidecars at `v0-2-0` weight 100 |
+| Faulty canary | rollback, error ratio 1.0 | 52 × HTTP 502 and 348 × HTTP 200 during the shift; next 20 × HTTP 200 |
+| 1000 ms delay, no HTTP failures | rollback, canary p95 975 ms | 220 × HTTP 200, error ratio 0, regression 1025.32; next 20 × HTTP 200 |
+| Prometheus URL `http://127.0.0.1:9` | fail closed, no promote | sidecars back to 100/0 in 129.4 s; URL restored |
+| Repeated stable apply | no second route write | stable Deployment ready 2; SA delete denied |
+| Scrape | Series changed during the run | `rollbacks_total` 2→3→4, then 0→1 after the pod replacement |
+| Grafana | Kind and GKE ConfigMaps have the controller panels | GKE API: health ok, three datasources healthy, dashboard `platformforge-overview` listed. UI was not opened |
+
+### Known limitations of the controller
+
+- `PLATFORMFORGE_CANARY_CONTEXT` is an environment check, not the API server identity. On GKE the process also requires `PLATFORMFORGE_CANARY_GKE=1` and the pod token. The Role is the write boundary.
+- Counters reset when the pod is replaced.
+- The 90/10 file is applied by the operator. The controller does not select it.
+- GKE controller image `sha256:b7e8af0a35fd1d968ee3aacf701701e15da8ff600d6360662885f6c5846cc6a2` is running. The first rollback is in `docs/GKE_CANARY_EXPERIMENT.md`. A later drill raised the cumulative rollback counter from 1 to 2. See `TEST_EVIDENCE.md`. Terraform and GitHub Actions were not changed.
+- The GKE latency drill is not measured. The running inventory digest does not set `INVENTORY_DELAY_MS`.
+
 ## Later milestones
 
 | Area | Status |
@@ -366,5 +418,6 @@ Routing stayed `v0-1-0=100`, `v0-2-0=0`.
 | Istio (STRICT mTLS, traffic management, canary) | **Verified on kind and on this GKE cluster** |
 | OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on kind and on this GKE cluster** |
 | CD (publish images, deploy from CI) | **Publish verified.** One `0.2.0` push succeeded. Cluster deploy from CI is still refused |
-| Read-only MCP server | **Kind and GKE live checks passed** as separate `platformforge-mcp-reader` tokens |
-| Incident simulation and rollback | Manual drill verified on GKE. Automated rollback is planned and unit-tested, not executed on the cluster |
+| Read-only MCP server | **Cursor called the GKE tools**, including the three rejection checks. The GKE reader Role now grants `get` on `virtualservices/inventory-service` only. `get_routing` returned `v0-1-0=100` and `v0-2-0=0`. See `docs/FINAL_DEMO.md` |
+| Incident simulation and rollback | Kind controller executed promote, error rollback, latency rollback, and fail-closed rollback. On GKE the cumulative rollback counter moved from 1 to 2 after a later faulty-canary drill. `verified_root_cause` stays null |
+| Recording port-forwards | **Local supervisor running.** `make demo-connect` restarts a dead loopback forward. `make demo-forwards` is still one-shot. No cluster object was changed by this pass |

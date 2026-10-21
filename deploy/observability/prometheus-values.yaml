@@ -80,3 +80,31 @@ scrapeConfigs:
       - source_labels: [__meta_kubernetes_pod_container_name]
         action: keep
         regex: istio-proxy
+
+# Private canary-controller metrics. Pod port only, namespace platformforge-dev only.
+# The pod has no sidecar, so this scrape is plaintext to the pod IP. No pushgateway.
+extraScrapeConfigs: |
+  - job_name: platformforge-canary
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - platformforge-dev
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: keep
+        regex: canary-controller
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: metrics
+      - source_labels: [__address__, __meta_kubernetes_pod_container_port_number]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod

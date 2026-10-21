@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from platformforge.mcp_server import investigate, kube_read, telemetry
+from platformforge.mcp_server import correlate, incident, investigate, kube_read, telemetry
 from platformforge.mcp_server.policy import (
     McpError,
     require_context,
     require_namespace,
+    require_request_id,
     require_service_name,
 )
 
@@ -65,6 +66,15 @@ class Backend:
     def get_service_status(self, context: str, namespace: str, name: str) -> dict[str, object]:
         clients = _clients(context)
         return kube_read.get_service_status(clients.core, namespace, name)
+
+    def get_routing(self, context: str, namespace: str) -> dict[str, object]:
+        clients = _clients(context)
+        if clients.custom is None:
+            raise McpError("virtualservice client is not configured")
+        return kube_read.get_routing(clients.custom, namespace)
+
+    def incident_metrics(self, service: str, window_seconds: int) -> dict[str, object]:
+        return incident.query_incident_metrics(service, window_seconds)
 
     def service_snapshot(self, context: str, namespace: str, service: str) -> dict[str, object]:
         clients = _clients(context)
@@ -138,6 +148,19 @@ def build_server(backend: Backend | None = None) -> Any:
         return access.get_service_status(context, namespace, name)
 
     @mcp.tool()
+    def get_routing(context: str, namespace: str) -> dict[str, object]:
+        """Read inventory-service VirtualService weights. Does not create or update the route."""
+        return access.get_routing(context, namespace)
+
+    @mcp.tool()
+    def query_incident_metrics(
+        context: str, service: str, window_seconds: int = 900
+    ) -> dict[str, object]:
+        """Return cumulative counters and one bounded increase window. NaN is not zero."""
+        require_context(context)
+        return access.incident_metrics(service, window_seconds)
+
+    @mcp.tool()
     def query_prometheus(context: str, query: str) -> dict[str, object]:
         """Run one bounded PromQL instant query against a loopback Prometheus URL."""
         require_context(context)
@@ -187,35 +210,70 @@ def build_server(backend: Backend | None = None) -> Any:
         service: str,
         symptom: str = "",
         trace_id: str = "",
+        request_id: str = "",
+        window_seconds: int = 900,
     ) -> dict[str, object]:
         """Collect bounded evidence and classify it. Does not declare a verified root cause."""
         require_namespace(namespace)
         service = require_service_name(service)
+        request_id = require_request_id(request_id)
         snapshot = access.service_snapshot(context, namespace, service)
         pods = snapshot["pods"]
         logs: list[dict[str, Any]] = []
+        texts: list[str] = []
         if isinstance(pods, list) and pods:
             first = pods[0]
             if isinstance(first, dict) and first.get("name"):
                 try:
-                    logs.append(
-                        access.get_pod_logs(
-                            context,
-                            namespace,
-                            str(first["name"]),
-                            service,
-                            20,
-                            900,
-                        )
+                    entry = access.get_pod_logs(
+                        context,
+                        namespace,
+                        str(first["name"]),
+                        service,
+                        20,
+                        900,
                     )
                 except McpError as exc:
                     logs.append({"container": service, "error": str(exc)})
+                else:
+                    logs.append(entry)
+                    texts.append(_log_text(entry))
         prom = access.prometheus(
             "sum by (response_code) (istio_requests_total"
             f'{{reporter="source",destination_service_name="{service}"}})'
         )
+        metrics = access.incident_metrics(service, window_seconds)
         loki = access.loki(f'{{namespace="{namespace}",app="{service}"}}')
+        texts.extend(_loki_texts(loki))
+        if request_id:
+            matched = access.loki(f'{{namespace="{namespace}"}} |= "{request_id}"')
+            texts.extend(_loki_texts(matched))
+        controller_logs = access.loki(f'{{namespace="{namespace}",app="canary-controller"}}')
+        texts.extend(_loki_texts(controller_logs))
         tempo = access.tempo(trace_id) if trace_id else None
+        if tempo is None:
+            extracted = correlate.correlate_evidence(
+                texts=texts, tempo=None, routing=None, metrics=None
+            )
+            found = extracted.get("trace_ids")
+            if isinstance(found, list) and found:
+                tempo = access.tempo(str(found[0]))
+        routing: dict[str, Any] | None = None
+        routing_note = ""
+        try:
+            routing = access.get_routing(context, namespace)
+        except McpError as exc:
+            routing_note = str(exc)
+        correlation = correlate.correlate_evidence(
+            texts=texts,
+            tempo=tempo if isinstance(tempo, dict) else None,
+            routing=routing,
+            metrics=metrics if isinstance(metrics, dict) else None,
+        )
+        if routing_note:
+            missing = correlation.get("missing")
+            if isinstance(missing, list):
+                missing.append(routing_note)
         events = snapshot["events"]
         report = investigate.build_report(
             service=service,
@@ -226,10 +284,12 @@ def build_server(backend: Backend | None = None) -> Any:
             logs=logs,
             prometheus=prom,
             loki=loki,
-            tempo=tempo,
+            tempo=tempo if isinstance(tempo, dict) else None,
+            correlation=correlation,
         )
         report["context"] = context
         report["namespace"] = namespace
+        report["verified_root_cause"] = None
         return report
 
     return mcp
@@ -239,6 +299,26 @@ def _as_dicts(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _log_text(entry: dict[str, Any]) -> str:
+    logs = entry.get("logs")
+    if isinstance(logs, dict):
+        return str(logs.get("text") or "")
+    return ""
+
+
+def _loki_texts(payload: dict[str, Any]) -> list[str]:
+    lines = payload.get("lines")
+    if not isinstance(lines, list):
+        return []
+    texts: list[str] = []
+    for line in lines:
+        if isinstance(line, dict):
+            texts.append(str(line.get("text") or ""))
+        elif isinstance(line, str):
+            texts.append(line)
+    return texts
 
 
 def main() -> None:

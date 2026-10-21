@@ -1,8 +1,10 @@
 # Architecture
 
-This document describes what exists today. Milestones 1–4 run on a local kind cluster.
-Milestone 5 is Terraform for one GKE development environment. That configuration is
-validated and has not been applied. No GCP resources have been created.
+This document describes what exists today. Milestones 1–4 run on a local kind
+cluster. The GKE cluster `platformforge-dev` in `us-central1-a` is running the
+same platform shape: digest-pinned workloads, Istio STRICT, the observability
+stack, and the canary controller. Terraform for that environment is
+`infra/terraform/`. Milestone 5 below is the live cluster.
 
 ## Milestone 1: implemented
 
@@ -155,14 +157,27 @@ workflow. GitHub OIDC for `MICHAELWlN/platformforge` is applied, and one
 [docs/CI_CD.md](docs/CI_CD.md). Canary decisions live in
 `platformforge.delivery` and do not call the cluster
 ([docs/PROGRESSIVE_DELIVERY.md](docs/PROGRESSIVE_DELIVERY.md)).
+`platformforge.canary` compares stable and canary Prometheus samples.
+`platformforge.canary_apply` installs a reviewed 100/0, 90/10, or 0/100
+VirtualService on `kind-platformforge` only. `platformforge.canary_controller`
+polls that route on kind, serves `GET /metrics`, and writes only the stable
+or promote file. The same loop runs on GKE from the digest-pinned Deployment
+in `deploy/gke/canary-controller.yaml`. That process also requires
+`PLATFORMFORGE_CANARY_GKE=1` and the pod service-account token. It does not
+select the 90/10 file. See [docs/AUTOMATED_CANARY.md](docs/AUTOMATED_CANARY.md),
+[docs/AUTOMATED_ROLLBACK.md](docs/AUTOMATED_ROLLBACK.md), and
+[docs/CANARY_CONTROLLER.md](docs/CANARY_CONTROLLER.md).
 
 ### Read-only MCP
 
 `python -m platformforge.mcp_server` is a stdio MCP server (`mcp` 2.3.0). It
-lists and reads allowlisted namespaces. Kind and GKE live checks each use
-their own `platformforge-mcp-reader` token. A GKE call without that token is
-rejected. It does not deploy, listen on a port, or start when the package is
-imported. See [docs/MCP_SERVER.md](docs/MCP_SERVER.md),
+lists and reads allowlisted namespaces. `get_routing` reads only
+`virtualservices/inventory-service` and only with get. `query_incident_metrics`
+keeps cumulative counters separate from a 15-to-900-second increase and does
+not treat NaN as zero. Kind and GKE live checks each use their own
+`platformforge-mcp-reader` token. A GKE call without that token is rejected.
+It does not deploy, listen on a port, or start when the package is imported.
+See [docs/MCP_SERVER.md](docs/MCP_SERVER.md),
 [docs/MCP_LIVE_INTEGRATION.md](docs/MCP_LIVE_INTEGRATION.md), and
 [docs/MCP_GKE_INTEGRATION.md](docs/MCP_GKE_INTEGRATION.md).
 
@@ -309,12 +324,17 @@ at 100/0. Kind remains the arm64 lab and was not modified. Details are in
 [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md) and
 [docs/GKE_OPERATIONS.md](docs/GKE_OPERATIONS.md).
 
-## Not implemented
+## Limits that remain
 
-- Applying the Terraform root, or any GCP resource
-- Artifact Registry, and therefore GKE pulls of `platformforge/*` images
-- GKE workload deployment through the CLI
-- Istio or the observability stack on GKE
-- CD (image publishing and deployment from CI)
-- A GCP IAM role that narrows the operator identity used to mint the MCP token
-- Metric-based canary promotion or automated rollback (the signals exist; the controller does not)
+- `platformforge deploy` refuses any context that does not start with `kind-`.
+  GKE re-deploys are `kubectl apply` on the pinned context.
+- The delivery workflow can publish an image digest. It still refuses to apply
+  manifests.
+- The GKE controller has not promoted `v0.2.0` to 100 percent. A later
+  faulty-canary drill raised the cumulative rollback counter from 1 to 2 and
+  left the controller state `stable`. `episode_age` 30.229 seconds on that
+  decision is the episode clock. `platformforge-canary` is the scrape job.
+  Terraform was not changed for the controller.
+- MCP investigations leave `verified_root_cause` null.
+- No GCP IAM role narrows the operator identity that mints the MCP reader token.
+- `deploy/kind/mcp-reader.yaml` has the same `get` rule and was not applied to kind.

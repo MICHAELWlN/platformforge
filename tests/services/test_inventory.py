@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -81,3 +83,20 @@ def test_invalid_failure_percent_env_rejected(monkeypatch, raw):
 def test_invalid_failure_percent_argument_rejected(value):
     with pytest.raises(ValueError, match="between 0 and 100"):
         create_app(failure_percent=value)
+
+
+def test_delay_slows_lookup_and_not_health():
+    with TestClient(create_app(delay_ms=300)) as c:
+        started = time.perf_counter()
+        assert c.get("/healthz").status_code == 200
+        assert time.perf_counter() - started < 0.15
+        started = time.perf_counter()
+        assert c.get("/inventory/widget").status_code == 200
+        assert time.perf_counter() - started >= 0.25
+
+
+@pytest.mark.parametrize("raw", ["-1", "2001", "slow"])
+def test_invalid_delay_env_rejected(monkeypatch, raw):
+    monkeypatch.setenv("INVENTORY_DELAY_MS", raw)
+    with pytest.raises(ValueError, match="INVENTORY_DELAY_MS"):
+        create_app()

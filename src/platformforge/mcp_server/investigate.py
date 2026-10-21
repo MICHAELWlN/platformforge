@@ -18,6 +18,7 @@ def build_report(
     prometheus: dict[str, Any] | None,
     loki: dict[str, Any] | None,
     tempo: dict[str, Any] | None,
+    correlation: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Return observations, evidence, hypotheses, gaps, and read-only next steps."""
     name = require_service_name(service)
@@ -62,6 +63,17 @@ def build_report(
     _telemetry(prometheus, "Prometheus", missing, supporting, hypotheses)
     _telemetry(loki, "Loki", missing, supporting, hypotheses)
     _telemetry(tempo, "Tempo", missing, supporting, hypotheses)
+    if isinstance(correlation, dict):
+        for fact in correlation.get("facts") or []:
+            text = str(fact)
+            if text.startswith("VirtualService"):
+                verified.append(text)
+            else:
+                supporting.append(text)
+        hypotheses.extend(str(item) for item in correlation.get("hypotheses") or [])
+        missing.extend(str(item) for item in correlation.get("missing") or [])
+    else:
+        missing.append("Request and trace correlation was not run.")
     return {
         "service": name,
         "verified_root_cause": None,
@@ -69,6 +81,7 @@ def build_report(
         "supporting_evidence": supporting,
         "possible_explanations": hypotheses,
         "missing": missing,
+        "correlation": correlation,
         "next_diagnostics": [
             "Read one request_id from an untrusted log line and look up that id in Loki.",
             "Query istio_requests_total by response_code. An empty result is missing telemetry.",

@@ -1,0 +1,54 @@
+# Drill only: the canary waits 1000ms on a successful lookup and still returns HTTP 200.
+# Health probes are not delayed. Recover by shifting traffic to v0.1.0, then redeploy
+# ../inventory-service-v0.2.0.yaml. Do not delete inventory-service-v0-1-0.
+apiVersion: platformforge.dev/v1alpha1
+kind: ServiceManifest
+metadata:
+  name: inventory-service
+  namespace: platformforge-dev
+spec:
+  image: platformforge/inventory-service:0.2.0
+  version: v0.2.0
+  serviceAccountName: inventory-service
+  replicas: 1
+  port: 8080
+  env:
+    - name: LOG_LEVEL
+      value: info
+    - name: INVENTORY_FAILURE_PERCENT
+      value: "0"
+    - name: INVENTORY_DELAY_MS
+      value: "1000"
+    - name: OTEL_SERVICE_NAME
+      value: inventory-service
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://tempo.platformforge-observability.svc.cluster.local:4318
+    - name: OTEL_EXPORTER_OTLP_PROTOCOL
+      value: http/protobuf
+    - name: OTEL_TRACES_SAMPLER
+      value: parentbased_always_on
+    - name: OTEL_BSP_SCHEDULE_DELAY
+      value: "1000"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  probes:
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 1
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+  termination:
+    gracePeriodSeconds: 30
+    preStopSleepSeconds: 5

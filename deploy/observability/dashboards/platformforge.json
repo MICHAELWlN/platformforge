@@ -95,6 +95,126 @@
           "legendFormat": "up"
         }
       ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Canary versus stable error rate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (destination_version) (rate(istio_requests_total{reporter=\"source\",destination_service_name=\"inventory-service\",response_code=~\"5..\"}[2m])) / sum by (destination_version) (rate(istio_requests_total{reporter=\"source\",destination_service_name=\"inventory-service\"}[2m]))",
+          "legendFormat": "{{destination_version}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Canary versus stable p95 latency",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ms"}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, destination_version) (rate(istio_request_duration_milliseconds_bucket{reporter=\"source\",destination_service_name=\"inventory-service\"}[2m])))",
+          "legendFormat": "{{destination_version}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Inventory traffic distribution",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (destination_version) (rate(istio_requests_total{reporter=\"source\",destination_service_name=\"inventory-service\"}[2m])) / ignoring(destination_version) group_left sum(rate(istio_requests_total{reporter=\"source\",destination_service_name=\"inventory-service\"}[2m]))",
+          "legendFormat": "{{destination_version}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Canary rollbacks",
+      "description": "Cumulative counter since the controller process started. It is not the count for the selected time range.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "platformforge_canary_rollbacks_total",
+          "legendFormat": "rollbacks"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Canary rollout state",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "platformforge_canary_state",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Controller canary error ratio",
+      "description": "NaN means this gauge is unset. It is not a measured zero.",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 40},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0}},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "platformforge_canary_error_ratio",
+          "legendFormat": "canary error ratio"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Controller latency regression",
+      "description": "NaN means this gauge is unset. It is not a measured zero.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 40},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "platformforge_canary_latency_regression",
+          "legendFormat": "p95 regression"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Canary decision history",
+      "description": "Cumulative decisions by action since the controller process started.",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 40},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "platformforge_canary_decisions_total",
+          "legendFormat": "{{action}}"
+        }
+      ]
     }
   ]
 }

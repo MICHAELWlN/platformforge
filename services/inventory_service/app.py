@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from typing import Annotated
@@ -17,6 +18,8 @@ log = logging.getLogger("inventory")
 
 ITEM_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
 FAILURE_PERCENT_ENV = "INVENTORY_FAILURE_PERCENT"
+DELAY_MS_ENV = "INVENTORY_DELAY_MS"
+MAX_DELAY_MS = 2000
 
 # Static demo catalog. A real service would use a datastore.
 CATALOG: dict[str, tuple[str, int]] = {
@@ -33,22 +36,29 @@ class InventoryItem(BaseModel):
     in_stock: bool
 
 
-def create_app(failure_percent: int | None = None) -> FastAPI:
+def create_app(failure_percent: int | None = None, delay_ms: int | None = None) -> FastAPI:
     """Build the app.
 
     ``failure_percent`` (or ``INVENTORY_FAILURE_PERCENT``, 0-100, default 0) makes that
-    share of inventory lookups return HTTP 500. It exists for canary-failure drills; health
-    endpoints are never affected, so it models a release that is "up" but wrong.
+    share of inventory lookups return HTTP 500. ``delay_ms`` (or ``INVENTORY_DELAY_MS``,
+    0-2000, default 0) waits before a successful lookup. Health endpoints are never
+    affected. Both exist for canary drills.
     """
     if failure_percent is None:
         failure_percent = env_int(FAILURE_PERCENT_ENV, 0, 0, 100)
     elif not 0 <= failure_percent <= 100:
         raise ValueError("failure_percent must be between 0 and 100")
+    if delay_ms is None:
+        delay_ms = env_int(DELAY_MS_ENV, 0, 0, MAX_DELAY_MS)
+    elif not 0 <= delay_ms <= MAX_DELAY_MS:
+        raise ValueError(f"delay_ms must be between 0 and {MAX_DELAY_MS}")
     app = create_service_app(SERVICE_NAME)
     if failure_percent:
         log.warning(
             "failure injection enabled", extra={"fields": {"failure_percent": failure_percent}}
         )
+    if delay_ms:
+        log.warning("delay injection enabled", extra={"fields": {"delay_ms": delay_ms}})
 
     @app.get("/inventory/{item_id}")
     async def get_inventory(
@@ -63,6 +73,8 @@ def create_app(failure_percent: int | None = None) -> FastAPI:
             log.info("item not found", extra={"fields": {"item_id": item_id}})
             raise HTTPException(status_code=404, detail={"error": "item_not_found"})
         name, quantity = entry
+        if delay_ms:
+            await asyncio.sleep(delay_ms / 1000)
         return InventoryItem(item_id=item_id, name=name, quantity=quantity, in_stock=quantity > 0)
 
     return app

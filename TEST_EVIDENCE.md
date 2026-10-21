@@ -1642,6 +1642,362 @@ After the run, inventory routing was still `v0-1-0=100` and `v0-2-0=0`.
 - A GCP IAM change. The operator client minted the token.
 - Removal of the ServiceAccount. That delete was not run.
 
+## M8 Kind canary analysis and rollback
+
+Date: 2026-10-21. Current context before and after:
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`.
+Every mutating call used `--context kind-platformforge` or
+`new_client_from_config(context="kind-platformforge", persist_config=False)`.
+GKE was not modified. Terraform was not run. The port-forward was stopped.
+
+Baseline before the drill: `v0-1-0=100`, `v0-2-0=0`,
+`INVENTORY_FAILURE_PERCENT=0`.
+
+```
+$ make lint
+ruff check: All checks passed
+ruff format --check: 63 files already formatted
+
+$ make test
+368 passed, 69 skipped in 1.77s
+
+$ PLATFORMFORGE_CANARY_IT=1 .venv/bin/pytest tests/integration/test_canary_kind.py::test_faulty_canary_rolls_back_from_prometheus -v -s
+1 passed in 28.68s
+```
+
+The skipped canary drill inside `make test` is the opt-in test above. It is
+not counted as a pass there.
+
+Decision from the 60s `increase` of source `istio_requests_total`:
+
+```
+v0.2.0 total 15.999644452345503 errors 15.999644452345503 ratio 1.0
+v0.1.0 total 125.33054821003977 errors 0.0
+action rollback
+reason canary error rate above threshold
+evaluation_seconds 6.252
+```
+
+Client traffic during 90/10: 178 HTTP 200 and 22 HTTP 502 out of 200.
+Sidecar weight returned to 100 on `v0-1-0` in 1.158s. The next 30 orders
+requests returned HTTP 200 while the canary was still faulty.
+`inventory-service-v0-1-0` stayed 2/2. The healthy manifest restored
+`INVENTORY_FAILURE_PERCENT=0` and weights `v0-1-0=100` `v0-2-0=0`.
+
+The decision's p95 fields were null. A follow-up 300s histogram query, not
+used as the decision input, returned p95 0.496 ms for `v0.1.0` and 2.800 ms
+for `v0.2.0`.
+
+Inventory container logs for request id `canary-26209-1` included trace ids
+`0f187d9415579fefc66df97e18027a9b` and `7376b0af67defab452d1b880be9d16bd`.
+Tempo was not queried.
+
+Kind ConfigMap `platformforge-dashboards` contains the five new panels.
+The GKE dashboard was not updated. `platformforge_canary_*` is not scraped.
+
+### What the one-shot drill does not show
+
+- A live rollback caused by p95 regression. The recorded decision used the 5xx ratio.
+- Promotion of the canary to 100 percent of traffic.
+- Any analysis or route change on GKE.
+- A Grafana UI session. The kind ConfigMap contents were read back. The admin password was not read.
+
+## Milestone 8 controller evidence (2026-10-21)
+
+`make lint` passed (`ruff check` and `ruff format --check`).
+
+`make test` (no `PLATFORMFORGE_CANARY_IT`): **389 passed, 70 skipped, 0 failed**
+in 12.58s. The skip list includes
+`tests/integration/test_canary_controller_kind.py`. That skip is not a pass.
+
+Opt-in, separate from `make test`:
+
+```text
+PLATFORMFORGE_CANARY_IT=1 .venv/bin/pytest tests/integration/test_canary_controller_kind.py -v -s
+1 passed in 335.84s
+```
+
+Current context was `gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`
+before and after. The test printed `experiment_context=kind-platformforge`.
+
+| Experiment | Result |
+| --- | --- |
+| Healthy 90/10, 400 requests | promote. HTTP 200 × 400. error ratio 0. canary total 56. stable p95 0.4777777777777778 ms. canary p95 0.4925925925925925 ms. regression 0.03100775193798431. episode age 15.01 s. Both orders sidecars: `v0-2-0` weight 100. |
+| Faulty 100% canary, 400 requests | rollback, `canary error rate above threshold`. HTTP 200 × 348, HTTP 502 × 52. canary total 52, errors 52, ratio 1.0. Post-decision weight wait 0.071 s. Recovery HTTP 200 × 20. |
+| Delay 1000 ms, failure percent 0, 220 requests | rollback, `canary p95 latency regressed`. HTTP 200 × 220. error ratio 0. canary total 15. stable p95 0.95 ms. canary p95 975 ms. regression 1025.3157894736842. Recovery HTTP 200 × 20. |
+| Prometheus `http://127.0.0.1:9` | `promoted` false. Fail-closed 129.4 s. Ended 100/0. URL restored to the in-cluster Service. |
+| Stable VirtualService applied twice | `applied` 2. One `route is already stable` log with `route_action` null. `inventory-service-v0-1-0` ready 2. SA delete deployments denied. SA update virtualservices allowed. |
+
+Prometheus summed series around unix time `1792563679`:
+
+| Offset | rollbacks_total | state | error_ratio | latency_regression | notes |
+| --- | --- | --- | --- | --- | --- |
+| -270s | 2 | 5 | 0 | 0.03100775193798431 | promote sample; the 2 includes earlier attempts on that pod |
+| -210s | 3 | 5 | | | faulty rollback |
+| -180s | 4 | 5 | 0 | 1025.3157894736842 | latency rollback |
+| -150s | 0 | 2 | | | pod replaced for the bad Prometheus URL |
+| -30s | 1 | 5 | | | fail-closed rollback on the new series |
+
+After URL restore, pod `canary-controller-7b9479b95b-6rjst` scraped by job
+`platformforge-canary`: rollbacks 0, state 5, error ratio NaN, latency
+regression NaN, `decisions_total{action="hold"}` 4. A 5 minute Istio query
+returned inventory `v0.2.0` p95 975 ms. Kind ConfigMap `platformforge-dashboards`
+lists the controller panels. The Grafana UI was not opened. The GKE dashboard
+was not changed.
+
+Left in place on kind: VirtualService weights 100 and 0,
+`INVENTORY_FAILURE_PERCENT=0`, controller Prometheus URL
+`http://prometheus-server.platformforge-observability.svc.cluster.local`,
+controller pod Ready. Port 19091 was not left listening.
+
+## GKE controller preparation (2026-10-21, not deployed)
+
+Read-only against context
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`. No apply, no
+image push, no helm upgrade, no routing change, no kind change.
+
+Server `v1.36.4-gke.1391002`, platform `linux/amd64`. One amd64 node,
+allocatable 3920m CPU and 13591632Ki memory, requests 1435m CPU and about
+24% of memory. `inventory-service-v0-1-0` ready 2/2,
+`inventory-service-v0-2-0` ready 1/1 with `INVENTORY_FAILURE_PERCENT=0`,
+`orders-service` ready 2/2. VirtualService `inventory-service` weights
+`v0-1-0=100` and `v0-2-0=0`. DestinationRule subsets match `v0.1.0` and
+`v0.2.0`. PeerAuthentication `default` is STRICT. `platformforge-dev` is
+`istio-injection=enabled` and pod security `restricted`. Prometheus Service
+`prometheus-server` is ClusterIP port 80 with a ready endpoint on 9090. The
+live Prometheus config has no `platformforge-canary` job. ClusterRole
+`platformforge-prometheus` has no ClusterRoleBinding. RoleBinding
+`prometheus-server` in `platformforge-dev` is get/list/watch on pods,
+services, endpoints, and endpointslices. ServiceAccount
+`platformforge-canary-controller`, Deployment `canary-controller`, and
+Service `canary-controller` are absent.
+
+```text
+.venv/bin/ruff check ...canary_apply.py ...canary_controller.py ...canary_runtime.py tests/unit/test_canary_controller.py tests/unit/test_gke_canary_manifest.py
+.venv/bin/ruff format --check (same files)
+.venv/bin/python -m pytest tests/unit/test_canary_controller.py tests/unit/test_canary.py tests/unit/test_gke_canary_manifest.py -q
+```
+
+Result: ruff passed, 35 passed in 10.70s, 0 failed.
+
+```text
+docker build --platform linux/amd64 --provenance=false -f deploy/kind/canary-controller.Dockerfile -t platformforge/canary-controller:0.1.0-amd64 .
+docker image inspect platformforge/canary-controller:0.1.0 --format '{{.Os}}/{{.Architecture}} {{.Id}}'
+docker run --rm --platform linux/amd64 ... platformforge/canary-controller:0.1.0-amd64
+```
+
+Result: local image `linux/amd64`
+`sha256:b7e8af0a35fd1d968ee3aacf701701e15da8ff600d6360662885f6c5846cc6a2`.
+The kind tag stayed `linux/arm64`
+`sha256:068d3f8bac469f943af2d662320ff952712aa7afe7d83c92fb4378fcf0e9e7c9`.
+The amd64 process exited 1: `GKE canary controller requires the pod service account token`.
+The image was not pushed and was not loaded into kind.
+
+```text
+make lint
+make test
+```
+
+Result: ruff check and format passed, 68 files. pytest 392 passed, 70 skipped, 0 failed in 12.65s. The kind controller experiment stayed skipped. No GKE marker was set.
+
+## GKE controller rollback (2026-10-21)
+
+Context displayed before each cluster command:
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`.
+Current context was already that context. Kind was not changed. Terraform,
+IAM, and GitHub Actions were not changed.
+
+Preflight matched the verified baseline: server `v1.36.4-gke.1391002`, one
+Ready amd64 node, allocatable 3920m CPU and 13591632Ki memory, requests 1435m
+CPU (36%) and about 24% memory. Inventory stable ready 2/2, canary ready 1/1
+with `INVENTORY_FAILURE_PERCENT=0`, orders ready 2/2. VirtualService
+`v0-1-0=100` `v0-2-0=0`. PeerAuthentication STRICT. AuthorizationPolicy
+`inventory-service` action ALLOW. No LoadBalancer or NodePort. No PVC.
+Artifact Registry had one Docker repository, `platformforge`.
+
+```text
+docker push us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge/canary-controller:0.1.0
+gcloud artifacts docker images describe .../canary-controller:0.1.0 --format=json
+```
+
+Digest `sha256:b7e8af0a35fd1d968ee3aacf701701e15da8ff600d6360662885f6c5846cc6a2`.
+Local inspect of that same id: `linux/amd64`, user `65532:65532`. No credential
+environment variables. `deploy/gke/canary-controller.yaml` now uses that digest
+and `image-pushed: true`.
+
+```text
+kubectl --context "$CTX" apply -f deploy/gke/canary-controller.yaml
+kubectl --context "$CTX" -n platformforge-dev rollout status deploy/canary-controller --timeout=180s
+```
+
+Pod `canary-controller-68c45c499b-s7pgh` Ready, 0 restarts, image the digest
+above, `runAsUser` 65532, sidecar inject false. Service `canary-controller` is
+ClusterIP port 8080. First decision log: `route is already stable`.
+`kubectl auth can-i` as `system:serviceaccount:platformforge-dev:platformforge-canary-controller`:
+get both inventory Deployments yes; get orders Deployment no; update or delete
+Deployments no; get and update VirtualService `inventory-service` yes; update
+VirtualService `orders-service` no; get or list Secrets no; delete the
+VirtualService no. No ClusterRoleBinding names that ServiceAccount.
+
+Prometheus Helm release `prometheus` was revision 1, chart `prometheus-29.37.0`.
+`helm get values` matched `deploy/observability/prometheus-values.yaml` except
+`extraScrapeConfigs` was absent. A client dry-run of the upgrade with that file
+and `deploy/gke/observability/prometheus-values.yaml` contained job
+`platformforge-canary`, ClusterIP, emptyDir, and no PersistentVolumeClaim or
+LoadBalancer. The RoleBinding still names ClusterRole `platformforge-prometheus`.
+
+```text
+.tools/helm upgrade prometheus prometheus-community/prometheus --version 29.37.0 \
+  -n platformforge-observability --kube-context "$CTX" \
+  -f deploy/observability/prometheus-values.yaml \
+  -f deploy/gke/observability/prometheus-values.yaml --wait --timeout 5m
+```
+
+Revision 2. The server pod was not replaced (`startTime` stayed
+`2026-10-21T00:47:02Z`); the configmap-reload container loaded the new job.
+`up{job="platformforge-canary"}` was 1. State gauge 5. Rollbacks 0 before the drill.
+
+The dashboard ConfigMap `platformforge-dashboards` was replaced from
+`deploy/observability/dashboards/platformforge.json`. Grafana `/api/health`
+returned database ok, version 13.2.4. Datasource health for Prometheus, Loki,
+and Tempo returned HTTP 200. Search lists `PlatformForge services`. The UI was
+not opened.
+
+Faulty canary: `python -m platformforge.gke render` of
+`services/manifests/incidents/inventory-service-v0.2.0-faulty.yaml` with
+`deploy/gke/image-lock.yaml`, then `platformforge deploy --dry-run`, then
+`kubectl apply`. The rendered image stayed
+`inventory-service@sha256:e995d076aa876ac8c8d1b854e9364256b83a52162a871c63bfefffb28778abe4`
+and `INVENTORY_FAILURE_PERCENT` was `100`. Rollout 16.3s. Then
+`inventory-virtualservice-canary.yaml`. Orders sidecars reached 90/10 in 1.62s.
+
+Controller log `2026-10-21T06:40:01.925945017Z`: `baseline recorded`.
+400 requests from `pf-test-client-mesh` to orders `/orders/check/widget`:
+HTTP 200 × 363, HTTP 502 × 37, in 13.3s.
+Controller log `2026-10-21T06:40:17.079311803Z`:
+
+```json
+{"action": "rollback", "canary_errors": 16.0, "canary_total": 16.0, "episode_age": 15.184, "error_ratio": 1.0, "event": "decision", "p95_regression": 3.3097014925373127, "reason": "canary error rate above threshold", "route_action": "rollback", "state": "stable"}
+```
+
+That is 15.15s after the baseline and 1.77s after the burst. The VirtualService
+was 100/0 1.04s after the log. Both orders sidecars showed only `v0-1-0` at
+weight 100, 2.19s after the log. The next 20 requests were HTTP 200. From the
+first burst request to the end of those 20 was 20.64s.
+
+After the next Prometheus scrape, inventory `v0.2.0` HTTP 500 was 63 (37 above
+the baseline of 26). `v0.1.0` HTTP 200 was 820 (383 above 437). The controller
+decided on the 16 errors present at its poll. `platformforge_canary_rollbacks_total`
+is 1 and `platformforge_canary_decisions_total{action="rollback"}` is 1.
+
+Recovery applied `inventory-virtualservice-stable.yaml` and the healthy
+`inventory-service-v0.2.0.yaml` through the same render path.
+`INVENTORY_FAILURE_PERCENT=0`. Stable ready 2/2, canary ready 1/1, orders
+ready 2/2, controller ready 1/1, all restarts 0. AuthorizationPolicy and
+PeerAuthentication specs matched the pre-drill specs. The restored canary pod
+logged one readiness HTTP 500 and one Istio startup-probe connection refusal,
+then became Ready.
+
+```text
+PLATFORMFORGE_GKE_CONTEXT=gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev .venv/bin/python -m pytest tests/gke -m gke -q
+make test
+```
+
+GKE checks: 4 passed in 14.36s. `make test`: 392 passed, 70 skipped, 0 failed
+in 12.61s. Port-forwards on 19091, 19093, and 19094 were stopped.
+
+## MCP assistant session (2026-10-21)
+
+Context displayed first:
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`.
+No failure was injected. Routing was not changed. The kind cluster, Terraform,
+IAM, and GitHub Actions were not changed. No paid model API was called.
+
+A one-hour TokenRequest for the existing ServiceAccount
+`platformforge-mcp-reader` was written to `/tmp/pf-mcp-reader/kubeconfig`
+(mode `0600`) and passed as `PLATFORMFORGE_MCP_KUBECONFIG`. The file was
+deleted after the session. Prometheus, Loki, and Tempo were port-forwarded to
+`127.0.0.1:9090`, `:3100`, and `:3200` only while the client ran, then stopped.
+
+The official `mcp.Client` launched `.venv/bin/python -m platformforge.mcp_server`
+over stdio. `list_tools` returned the twelve read-only tools. `list_pods` on
+`kube-system`, `list_pods` with context `gke-other`, and `get_pod_logs` with
+`since_seconds=99999` each returned a tool error.
+
+`investigate_incident` for `inventory-service` returned `verified_root_cause`
+null, both inventory Deployments available, and the hypothesis that HTTP 5xx
+samples are present. Prometheus instant series: `v0.1.0` 200=821, `v0.1.0`
+403=8, `v0.2.0` 200=20, `v0.2.0` 500=63. No `v0.1.0` 500 series.
+`platformforge_canary_rollbacks_total` 1, rollback decisions 1, state
+`stable`=5, error ratio NaN. Controller logs included `error_ratio` 1.0,
+`canary_errors` 16, and `episode_age` 15.184. Loki returned 100 inventory
+lines and 43 controller lines. A retained request id was
+`gke-recover-1792564819-19`. Tempo returned 3 batches for trace
+`af7c43c78feb106200ac2f8131a8cc83` and no span status codes. No tool returned
+VirtualService weights.
+
+```text
+PLATFORMFORGE_MCP_GKE=1 .venv/bin/python -m pytest tests/integration/test_mcp_gke.py -q --tb=line
+make test
+```
+
+MCP GKE file: 2 passed in 3.60s. `make test`: 392 passed, 70 skipped, 0 failed
+in 12.50s. The first telemetry attempt failed because the port-forwards had
+already exited. The numbers above are from the retry with the forwards still
+listening. Port 9090, 3100, and 3200 were not left listening.
+
+## Demo helpers (2026-10-21)
+
+`.cursor/mcp.json` points Cursor at `scripts/demo/mcp-server.sh` with the
+reader kubeconfig path and the three loopback telemetry URLs. It contains no
+token. A search of this chat's tool catalog for `platformforge`,
+`investigate_incident`, `list_pods`, and `query_prometheus` returned no MCP
+tools. No model-driven call through Cursor was observed. The stdio server was
+not claimed complete from a Python client in this pass.
+
+```text
+bash scripts/demo/fail-canary.sh
+bash scripts/demo/restore-healthy.sh
+bash scripts/demo/traffic.sh
+.venv/bin/pytest tests/unit/test_demo_helpers.py -q
+```
+
+Each mutating helper exited 2 before any cluster call. The unit file passed,
+4 tests. After the reader helper was renamed so the secret scan accepts the
+filename, `make test` was 396 passed, 70 skipped, 0 failed in 12.34s.
+
+Loopback forwards stayed up after `telemetry ready`: Prometheus, Loki, Tempo,
+and Grafana each returned HTTP 200 on `127.0.0.1`. Stop them with
+`make demo-stop`.
+
+A later catalog read in the same agent session still listed only `cursor`,
+`cursor-ide-browser`, and `cursor-origin`. `platformforge` was not among
+them. Prometheus `:9090`, Loki `:3100`, and Tempo `:3200` were HTTP 200.
+`/tmp/pf-mcp-reader/kubeconfig` was mode `0600`, user
+`platformforge-mcp-reader`, with a token present and no exec plugin. No
+model-driven MCP call was made.
+
+```text
+make demo-preflight
+make demo-reader
+make demo-controller
+```
+
+Context was the pinned GKE context. Node Ready `v1.36.4-gke.1391002`.
+Inventory 2/2 and 1/1, orders 2/2, controller 1/1. Route `v0-1-0=100`,
+`v0-2-0=0`. STRICT. `INVENTORY_FAILURE_PERCENT=0`. No LoadBalancer, NodePort,
+or PVC. Controller log `route is already stable`. Reader kubeconfig written
+to `/tmp/pf-mcp-reader/kubeconfig` for user `platformforge-mcp-reader`.
+Failure injection was not run. Terraform, IAM, GitHub Actions, and kind were
+not changed.
+
+### What the controller run does not show
+
+- A GKE deployment of the controller, a Terraform apply, or a GitHub Actions change.
+- A Grafana browser session.
+- Decision history as a log inside Grafana. The history panel is the decisions counter. The JSON stdout is the event record.
+- A rollback whose post-decision sidecar wait was longer than 0.071 s. The faulty route was already at weight 100 when that timer started.
+
 ## What Milestone 3 evidence does not show
 
 - Anything on GKE, multi-node, or multi-cluster; only a single-node kind cluster.
@@ -1652,3 +2008,119 @@ After the run, inventory routing was still `v0-1-0=100` and `v0-2-0=0`.
   peer certificates, and Istio's `connection_security_policy`, not by tcpdump.
 - Authorization for orders-service or demo-web; only inventory-service has a policy.
 - Egress restrictions or NetworkPolicy.
+
+## Incident evidence and demo prep (2026-10-21)
+
+`get_routing` reads `virtualservices/inventory-service` with
+`get_namespaced_custom_object` only. `deploy/gke/mcp-reader.yaml` and
+`deploy/kind/mcp-reader.yaml` add `get` on that named object. Neither file
+was applied. The live GKE Role is unchanged, so a cluster call is expected
+to return 403 until that Role change is approved.
+
+`query_incident_metrics` labels cumulative counters and a 15-to-900-second
+`increase()` separately. A NaN gauge is `sample=unset` with value null.
+An empty series is missing, not zero. Tempo spans report HTTP status and
+`service.version` only when those attributes are present. `verified_root_cause`
+stays null.
+
+```text
+make lint
+make test
+```
+
+`make lint` passed. `make test`: 402 passed, 70 skipped, 0 failed in 12.66s.
+Kind and GKE integration tests stayed skipped. No failure was injected.
+Terraform, IAM, routing, and the live reader Role were not changed. The
+Grafana JSON gained NaN descriptions; the live ConfigMap was not replaced.
+
+## Reader Role get on the inventory VirtualService (2026-10-21)
+
+Context was `gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`.
+`kubectl diff` showed one added rule: `get` `networking.istio.io/virtualservices`
+`resourceNames: inventory-service`. Server dry-run: ServiceAccount unchanged,
+Role configured, RoleBinding unchanged. `kubectl apply -f deploy/gke/mcp-reader.yaml`
+reported the same. Kind was not changed.
+
+`get_routing` as `platformforge-mcp-reader` returned `v0-1-0=100`, `v0-2-0=0`,
+`writable` false. `orders-service` returned 403. `auth can-i` for that
+ServiceAccount: get inventory-service yes; get orders-service, list
+virtualservices, update and delete inventory-service, get secrets, update and
+patch deployments, create pods/exec all no. Impersonated get of a secret,
+server-dry-run patch of `orders-service`, and exec were Forbidden. Route stayed
+`v0-1-0=100 v0-2-0=0`. Deployments stayed Ready: controller 1/1, inventory 2/2
+and 1/1, orders 2/2.
+
+## Local port-forward supervisor (2026-10-21)
+
+`tests/unit/test_connect_supervisor.py` and `tests/unit/test_demo_helpers.py`:
+13 passed. No cluster call. `make demo-connect` then started supervisor pid
+75340, parent pid 1. All four probes returned ok. Grafana listened on
+`127.0.0.1:3000` and `[::1]:3000`. Prometheus, Loki, and Tempo listened on
+`127.0.0.1` only. `appUrl` in the login page was `http://localhost:3000/`.
+
+The Grafana `kubectl port-forward` pid 75420 was signaled with SIGTERM.
+Replacement pid 75550 was connected in 3.51s. The supervisor recorded 2.47s.
+Restart counts were prometheus 0, loki 0, tempo 0, grafana 1.
+
+The dashboard at `http://localhost:3000/d/platformforge-overview` kept
+`refresh=10s`. One refresh during the kill showed `Failed to fetch`. The next
+refresh showed 14 panels and no plugin-load error. From 04:41:31 to 04:56:44
+EDT, 31 HTTP samples had 0 interruptions and the same restart counts.
+
+After the run, pod `grafana-59f67b85ff-zbcvp` uid
+`a4e587a7-7e00-43ab-968a-f4bbd60f3b27` was Ready with 0 restarts. Deployment
+generation stayed 2, memory 256Mi/768Mi. The four Services stayed ClusterIP.
+The supervisor was left running.
+
+## Second GKE failure drill, for the public README (2026-10-21)
+
+This entry records the later faulty-canary burst used in `README.md`. The
+first drill remains the section "GKE controller rollback (2026-10-21)" above,
+where the client saw HTTP 200 × 363 and HTTP 502 × 37, the controller sample
+was 16/16, and `platformforge_canary_rollbacks_total` moved from 0 to 1.
+This pass did not re-run the drill and did not change the cluster.
+
+Operator-verified client result after that first rollback:
+
+| Observation | Value |
+| --- | --- |
+| Requests | 400 |
+| HTTP 200 | 356 |
+| HTTP 502 | 44 |
+| Controller sample | 26 canary errors / 26 canary requests |
+| Error ratio | 1.0 |
+| Decision | `rollback`, resulting controller state `stable` |
+| Cumulative rollback counter | 1 to 2 |
+
+The decision JSON includes `episode_age` 30.229 seconds. That field is the
+controller episode clock. It is not a measured client recovery time. The
+26-request sample is the controller delta at that poll, separate from the
+44 client 502s. `verified_root_cause` remains null. A read-only MCP pass
+after the drill is summarized in the canvas notes for that session: route
+100/0, controller state `stable`, cumulative rollback decisions 2.
+
+## Public release validation (2026-10-21)
+
+No cluster command. Terraform was not planned or applied. IAM and GitHub
+Actions settings were not changed.
+
+```text
+make lint
+make test
+terraform -chdir=infra/terraform fmt -check -recursive
+.venv/bin/python -m platformforge.secretscan
+gitleaks git . --redact
+gitleaks dir . --redact
+```
+
+`make lint`: ruff check passed, 72 files already formatted.
+`make test`: 411 passed, 70 skipped, 0 failed in 12.77s. Kind and GKE tests
+stayed skipped.
+`terraform fmt -check -recursive`: clean.
+`python -m platformforge.secretscan`: `secret scan clean`.
+`gitleaks git . --redact`: 9 commits scanned, no leaks found.
+`gitleaks dir . --redact`: 7 findings, all under gitignored
+`.tools/istio-1.31.2/samples/`. Six are Istio sample private keys. One is a
+Bookinfo sample Kubernetes Secret. They are bundled third-party samples, not
+project credentials, and they are not staged.
+

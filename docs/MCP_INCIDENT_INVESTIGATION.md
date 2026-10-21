@@ -2,6 +2,7 @@
 
 The kind result is in [MCP_LIVE_INTEGRATION.md](MCP_LIVE_INTEGRATION.md).
 The GKE result is in [MCP_GKE_INTEGRATION.md](MCP_GKE_INTEGRATION.md).
+The assistant session is in [MCP_AI_DEMO.md](MCP_AI_DEMO.md).
 This page is how to read the report.
 
 Use `investigate_incident` after the cluster is already showing a symptom.

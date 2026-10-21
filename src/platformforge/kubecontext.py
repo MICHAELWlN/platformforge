@@ -33,6 +33,7 @@ class KubeContext:
 class KubeClients:
     core: client.CoreV1Api
     apps: client.AppsV1Api
+    custom: client.CustomObjectsApi | None = None
 
 
 def _kubeconfig_paths() -> list[Path]:

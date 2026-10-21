@@ -92,6 +92,14 @@ def require_service_name(name: str) -> str:
     return name
 
 
+def require_request_id(value: str) -> str:
+    if not value:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", value):
+        raise McpError("request_id is not a bounded identifier")
+    return value
+
+
 def sensitive_env_name(name: str) -> bool:
     return _SENSITIVE_NAME.search(name) is not None
 
