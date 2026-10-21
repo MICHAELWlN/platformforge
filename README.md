@@ -10,13 +10,11 @@ investigation API were verified on a private zonal GKE cluster on
 It is a single-node lab, not a production platform. Leaving the cluster up
 creates cloud charges until it is destroyed.
 
-## Demo video
+### Live Demo — Automated Canary Rollback
 
-> **Demo video:** `TODO_FINAL_DEMO_VIDEO_URL`
+[▶ Watch the 2-Minute PlatformForge Demo](https://lnkd.in/p/gpw-juYe)
 
-The recording is not published yet. Replace that token with the URL. The
-shot list is [docs/FINAL_DEMO.md](docs/FINAL_DEMO.md). The spoken script is
-[docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
+Demonstrates controlled failure injection on GKE, automated Istio traffic rollback, Grafana observability, and AI-assisted incident investigation using 14 custom read-only MCP tools.
 
 ## Demonstration evidence
 
