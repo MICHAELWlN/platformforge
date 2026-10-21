@@ -340,7 +340,6 @@ documented in the same deployment guide. This repository does not run it.
 - Controller counters reset when the pod is replaced. Telemetry disks are
   emptyDir.
 - One zonal node. A preemption or a disruptive upgrade takes the lab with it.
-- The demo video URL is not in the repository yet.
 - No license file is committed.
 
 ## Documentation
@@ -641,7 +640,6 @@ Removing Istio itself is described in [docs/ISTIO.md](docs/ISTIO.md#cleanup-manu
 - [docs/MCP_INCIDENT_INVESTIGATION.md](docs/MCP_INCIDENT_INVESTIGATION.md): how to read an investigation report
 - [docs/MCP_AI_DEMO.md](docs/MCP_AI_DEMO.md): 45–60 second stdio investigation demo
 - [docs/FINAL_DEMO.md](docs/FINAL_DEMO.md): four-minute recording procedure
-- [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md): spoken script
 - [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md): recording checklist
 - [docs/DEMO_TROUBLESHOOTING.md](docs/DEMO_TROUBLESHOOTING.md): demo recovery without new cloud resources
 - [docs/MCP_LIVE_INTEGRATION.md](docs/MCP_LIVE_INTEGRATION.md): kind reader identity and live tool results
