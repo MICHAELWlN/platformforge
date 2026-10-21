@@ -74,6 +74,8 @@ def test_delivery_cannot_run_from_a_pull_request() -> None:
     assert "secrets." not in text
     assert "GOOGLE_APPLICATION_CREDENTIALS" not in text
     assert "refuse-apply" in text
+    assert "65532:65532" in text
+    assert 'test "$status" -eq 2' in text
     for job in document["jobs"].values():
         condition = job["if"]
         assert "workflow_dispatch" in condition

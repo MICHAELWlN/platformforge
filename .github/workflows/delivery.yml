@@ -80,8 +80,9 @@ jobs:
             --build-arg "GIT_SHA=${GITHUB_SHA::7}" \
             -t "${REGISTRY}/${{ matrix.service }}:${VERSION}" \
             services
-          docker image inspect "${REGISTRY}/${{ matrix.service }}:${VERSION}" \
-            --format '{{.Os}}/{{.Architecture}}' | grep -qx 'linux/amd64'
+          image="${REGISTRY}/${{ matrix.service }}:${VERSION}"
+          docker image inspect "$image" --format '{{.Os}}/{{.Architecture}}' | grep -qx 'linux/amd64'
+          docker image inspect "$image" --format '{{.Config.User}}' | grep -qx '65532:65532'
       - name: Scan before push
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -128,4 +129,9 @@ jobs:
             --context gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev \
             --project platformforge-dev-mn2026 \
             --cluster platformforge-dev
+          set +e
           python -m platformforge.delivery refuse-apply
+          status="$?"
+          set -e
+          test "$status" -eq 2
+          echo "apply remains refused"
