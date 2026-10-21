@@ -2124,3 +2124,23 @@ stayed skipped.
 Bookinfo sample Kubernetes Secret. They are bundled third-party samples, not
 project credentials, and they are not staged.
 
+## CI demo-helper config (2026-10-21)
+
+GitHub Actions run 39579974011 failed
+`tests/unit/test_demo_helpers.py::test_cursor_mcp_config_is_stdio_and_has_no_token`
+with `FileNotFoundError` because the test read gitignored `.cursor/mcp.json`.
+The test now reads tracked `.cursor/mcp.example.json`. The local
+`.cursor/mcp.json` was not modified.
+
+```text
+.venv/bin/pytest tests/unit/test_demo_helpers.py -q
+make lint
+make test
+.venv/bin/python -m platformforge.secretscan
+```
+
+Helper file: 4 passed. `make lint`: ruff check passed, 72 files already formatted.
+`make test`: 411 passed, 70 skipped, 0 failed in 12.53s. Secret scan: `secret scan clean`.
+`git check-ignore` ignores `.cursor/mcp.json` and does not ignore
+`.cursor/mcp.example.json`.
+

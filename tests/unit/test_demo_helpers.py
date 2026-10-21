@@ -7,7 +7,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DEMO = REPO / "scripts" / "demo"
-MCP = REPO / ".cursor" / "mcp.json"
+MCP = REPO / ".cursor" / "mcp.example.json"
 
 
 def _text(name: str) -> str:
@@ -51,15 +51,22 @@ def test_port_forwards_are_loopback() -> None:
 
 
 def test_cursor_mcp_config_is_stdio_and_has_no_token() -> None:
-    config = json.loads(MCP.read_text(encoding="utf-8"))
+    raw = MCP.read_text(encoding="utf-8")
+    config = json.loads(raw)
     server = config["mcpServers"]["platformforge"]
-    assert server["command"].endswith("scripts/demo/mcp-server.sh")
+    assert server["command"] == "scripts/demo/mcp-server.sh"
+    assert server["args"] == []
+    assert "url" not in server
     env = server["env"]
+    reader_kubeconfig = "/tmp/pf-mcp-reader/kubeconfig"  # noqa: S108
+    assert env["PLATFORMFORGE_MCP_KUBECONFIG"] == reader_kubeconfig
     assert env["PLATFORMFORGE_PROMETHEUS_URL"] == "http://127.0.0.1:9090"
     assert env["PLATFORMFORGE_LOKI_URL"] == "http://127.0.0.1:3100"
     assert env["PLATFORMFORGE_TEMPO_URL"] == "http://127.0.0.1:3200"
     assert "PLATFORMFORGE_MCP_HTTP" not in env
-    raw = MCP.read_text(encoding="utf-8").lower()
-    assert "eyj" not in raw
-    assert "bearer " not in raw
-    assert "BEGIN PRIVATE" not in raw
+    lowered = raw.lower()
+    assert "/users/" not in lowered
+    assert "/home/" not in lowered
+    assert "eyj" not in lowered
+    assert "bearer " not in lowered
+    assert "begin private" not in lowered

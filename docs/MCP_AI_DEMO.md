@@ -1,7 +1,10 @@
 # AI-assisted incident investigation
 
 The four-minute recording steps are [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md).
-Cursor's project config is `.cursor/mcp.json`.
+Copy `.cursor/mcp.example.json` to gitignored `.cursor/mcp.json`. The
+example uses a relative launcher path and contains no token. If Cursor does
+not resolve that relative command, set `command` in the local copy to the
+absolute path of `scripts/demo/mcp-server.sh` on that machine.
 
 A 45–60 second segment for a four-minute PlatformForge demo. The assistant is
 an MCP client speaking stdio to `python -m platformforge.mcp_server`. Cursor
@@ -40,26 +43,11 @@ kubectl --context "$CTX" -n platformforge-observability port-forward --address 1
 kubectl --context "$CTX" -n platformforge-observability port-forward --address 127.0.0.1 svc/tempo 3200:3200
 ```
 
-The project file `.cursor/mcp.json` is the Cursor config. It does not contain
-a token. `scripts/demo/mcp-server.sh` refuses to start if
-`PLATFORMFORGE_MCP_HTTP` is set, then execs `.venv/bin/python -m platformforge.mcp_server`.
-
-```json
-{
-  "mcpServers": {
-    "platformforge": {
-      "command": "/Users/michaelnguyen/Projects/platformforge/scripts/demo/mcp-server.sh",
-      "args": [],
-      "env": {
-        "PLATFORMFORGE_MCP_KUBECONFIG": "/tmp/pf-mcp-reader/kubeconfig",
-        "PLATFORMFORGE_PROMETHEUS_URL": "http://127.0.0.1:9090",
-        "PLATFORMFORGE_LOKI_URL": "http://127.0.0.1:3100",
-        "PLATFORMFORGE_TEMPO_URL": "http://127.0.0.1:3200"
-      }
-    }
-  }
-}
-```
+The tracked template is `.cursor/mcp.example.json`. The local Cursor config
+is `.cursor/mcp.json`, which stays gitignored. Neither file contains a token.
+`scripts/demo/mcp-server.sh` refuses to start if `PLATFORMFORGE_MCP_HTTP` is
+set, then execs `.venv/bin/python -m platformforge.mcp_server`. The launcher
+is stdio only.
 
 Enable `platformforge` in Cursor Settings → MCP, then reload it. The tool
 list must include `get_routing` and `query_incident_metrics` plus the original

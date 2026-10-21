@@ -63,4 +63,6 @@ recordings/
 *.mkv
 .mypy_cache/
 .cache/
-.cursor/
+# Local Cursor config may contain an absolute path. The example is tracked.
+.cursor/*
+!.cursor/mcp.example.json

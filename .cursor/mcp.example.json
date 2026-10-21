@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "platformforge": {
+      "command": "scripts/demo/mcp-server.sh",
+      "args": [],
+      "env": {
+        "PLATFORMFORGE_MCP_KUBECONFIG": "/tmp/pf-mcp-reader/kubeconfig",
+        "PLATFORMFORGE_PROMETHEUS_URL": "http://127.0.0.1:9090",
+        "PLATFORMFORGE_LOKI_URL": "http://127.0.0.1:3100",
+        "PLATFORMFORGE_TEMPO_URL": "http://127.0.0.1:3200"
+      }
+    }
+  }
+}
