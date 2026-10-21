@@ -46,7 +46,6 @@ module "network" {
   services_range_name = var.services_range_name
   master_ipv4_cidr    = var.master_ipv4_cidr
 
-  depends_on = [google_project_service.required]
 }
 
 module "iam" {

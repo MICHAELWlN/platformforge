@@ -1,0 +1,10 @@
+# Overlay. Pass after deploy/observability/alloy-values.yaml.
+# One Deployment. No hostPath and no DaemonSet.
+controller:
+  type: deployment
+service:
+  type: ClusterIP
+alloy:
+  mounts:
+    varlog: false
+    dockercontainers: false

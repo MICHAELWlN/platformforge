@@ -75,6 +75,29 @@ def test_context_declined_aborts(fake_cluster, command):
     assert fake_cluster["loaded"] is False
 
 
+def test_matching_gke_context_never_loads_clients(monkeypatch):
+    gke = KubeContext(
+        "gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev",
+        "gke",
+        "user",
+        "https://example.invalid",
+        "/x",
+    )
+    loaded = {"value": False}
+    monkeypatch.setattr(kubecontext, "current_context", lambda: gke)
+    monkeypatch.setattr(
+        kubecontext,
+        "load_clients",
+        lambda ctx: loaded.__setitem__("value", True),
+    )
+    result = runner.invoke(
+        cli.app, ["status", str(EXAMPLE_MANIFEST), "--approve-context", gke.name]
+    )
+    assert result.exit_code == cli.EXIT_CONTEXT_NOT_APPROVED
+    assert "not a kind cluster" in result.output
+    assert loaded["value"] is False
+
+
 @pytest.mark.parametrize("command", ["deploy", "status", "logs"])
 def test_context_flag_mismatch_aborts(fake_cluster, command):
     result = runner.invoke(

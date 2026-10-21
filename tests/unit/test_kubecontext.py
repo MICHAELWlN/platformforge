@@ -84,6 +84,22 @@ def test_approval_flag_match_skips_prompt():
     kubecontext.require_approval(CTX, "kind-test", confirm=confirm)
 
 
+def test_gke_context_is_refused_even_when_the_name_matches():
+    ctx = KubeContext(
+        "gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev",
+        "gke",
+        "user",
+        "https://example.invalid",
+        "/x",
+    )
+
+    def confirm(_):
+        raise AssertionError("should not prompt")
+
+    with pytest.raises(ContextError, match="not a kind cluster"):
+        kubecontext.require_approval(ctx, ctx.name, confirm=confirm)
+
+
 def test_interactive_approval_declined():
     with pytest.raises(ContextError, match="not approved"):
         kubecontext.require_approval(CTX, None, confirm=lambda _: False)

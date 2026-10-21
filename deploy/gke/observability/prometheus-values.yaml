@@ -1,0 +1,18 @@
+# Overlay. Pass after deploy/observability/prometheus-values.yaml.
+# Repeats the locks that keep Prometheus off a PersistentVolume and off a public Service.
+# The default StorageClass on this cluster (standard-rwo) would create a disk.
+server:
+  persistentVolume:
+    enabled: false
+  emptyDir:
+    sizeLimit: 1Gi
+  service:
+    type: ClusterIP
+alertmanager:
+  enabled: false
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false

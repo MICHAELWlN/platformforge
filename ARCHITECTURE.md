@@ -260,7 +260,7 @@ namespace can read `pods` and `pods/log`. Loki, Tempo, and Grafana have no Kuber
 API permissions. Details, chart versions, and the emptyDir consequence are in
 [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 
-## Milestone 5: Terraform defined, not provisioned
+## Milestone 5: GKE cluster with the platform installed
 
 ```
  operator laptop (CIDR on the authorized-network list)
@@ -282,11 +282,16 @@ API permissions. Details, chart versions, and the emptyDir consequence are in
      workload SA -> no project roles; one Kubernetes SA may impersonate it
 ```
 
-Terraform in `infra/terraform/` builds that shape and nothing else. It does not install
-Istio, Prometheus, Grafana, Loki, Tempo, or Alloy, and it does not publish container
-images. Those steps stay where they are today: `istioctl`, Helm, and local `docker build`.
-Details, the public-endpoint tradeoff, and the destroy procedure are in
-[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md).
+Terraform in `infra/terraform/` builds that shape and nothing else. The cluster
+is running at `v1.36.4-gke.1391002` with one private `e2-standard-4` node.
+Istio 1.31.2 (CNI chained onto Dataplane V2, native sidecars, no gateways),
+the two services, and the observability stack are installed. Application images
+are digest-pinned from the private Artifact Registry repository `platformforge`
+in `us-central1`. Mesh policy is the same reviewed files used on kind: STRICT
+mTLS, inventory authorization limited to `orders-service`, and stable routing
+at 100/0. Kind remains the arm64 lab and was not modified. Details are in
+[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md) and
+[docs/GKE_OPERATIONS.md](docs/GKE_OPERATIONS.md).
 
 ## Not implemented
 

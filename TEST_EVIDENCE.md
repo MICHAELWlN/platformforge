@@ -900,7 +900,11 @@ had no parse error. `enable_intranode_visibility = true` and
 cleared CKV_GCP_61 and CKV_GCP_12 without enabling the Calico add-on.
 `var.labels` cleared CKV_GCP_21 once the variables file parsed.
 
-## What Milestone 5 evidence does not show
+## What the first Milestone 5 pass does not show
+
+The list below is the earlier pass, when this machine had no credentialed
+account. The readiness pass that follows it is M5.5. M5.5 still does not
+show a plan, an apply, a quota number, or a catalog price.
 
 - `terraform plan` or `terraform apply`. No cluster, VPC, NAT gateway, or IAM
   binding exists because of this change.
@@ -912,6 +916,306 @@ cleared CKV_GCP_61 and CKV_GCP_12 without enabling the Calico add-on.
 - Istio or the observability stack on GKE.
 - Any change to the kind cluster or to the 352 passing tests recorded for
   Milestone 4.
+
+## M5.5 Pre-deployment readiness (read-only)
+
+Date: 2026-10-20, after M5.1. No `terraform apply`, no `terraform plan`, no
+`terraform destroy`, no API enablement, no IAM change, and no GCP resource
+create. `kubectl config current-context` was displayed and was
+`kind-platformforge`. No `kubectl` request was sent to that cluster. No
+Terraform state file existed before or after this pass. Access tokens were
+minted to prove Application Default Credentials and to call
+`testIamPermissions`. They were not printed and are not recorded here. The
+operator address in `terraform.tfvars` was classified and compared with
+egress. The address itself is not recorded here.
+
+### Account, project, billing, credentials
+
+```
+$ gcloud auth list
+ACCOUNT                      ACTIVE
+michaelnguyen3790@gmail.com  *
+
+$ gcloud config get-value account
+michaelnguyen3790@gmail.com
+
+$ gcloud config get-value project
+platformforge-dev-mn2026
+
+$ terraform version
+Terraform v1.16.5
+on darwin_arm64
+
+$ gcloud version
+Google Cloud SDK 590.0.0
+```
+
+`gcloud projects describe platformforge-dev-mn2026` returned `lifecycleState:
+ACTIVE`, display name `PlatformForge Dev`, project number `345366894072`, and
+no `parent`. `gcloud projects get-ancestors` returned only the project.
+Application Default Credentials file exists, type `authorized_user`, quota
+project `platformforge-dev-mn2026`. `gcloud auth application-default
+print-access-token` was sent to `/dev/null` and exited 0.
+
+`gcloud billing projects describe` returned `billingEnabled: true` and an
+open billing account (`displayName: My Billing Account`, `open: true`).
+`gcloud billing projects list` for that account returned exactly two
+projects, both with billing enabled: `platformforge-dev-mn2026` and
+`project-60f4c264-06bf-4137-83e` (`My First Project`, organization parent
+`646137575222`). The second project's organization does not contain
+`platformforge-dev-mn2026`.
+
+`gcloud billing budgets list` was not completed. `billingbudgets.googleapis.com`
+is disabled. The command's enable prompt was not accepted. The $25 alert was
+not re-read from the API.
+
+### APIs and existing resources
+
+Enabled services included `logging.googleapis.com` and
+`monitoring.googleapis.com`. They did not include
+`compute.googleapis.com`, `container.googleapis.com`, or
+`iam.googleapis.com`.
+
+| Probe | Result |
+| --- | --- |
+| `gcloud compute networks list`, addresses, routers, `regions describe us-central1` | `SERVICE_DISABLED` for Compute Engine. Google's text says the API has not been used in this project before or it is disabled |
+| `gcloud container clusters list` and `get-server-config --zone us-central1-a` | Kubernetes Engine API disabled, same text, on this project |
+| Same cluster list on `project-60f4c264-06bf-4137-83e` | Kubernetes Engine API disabled there too. No cluster was returned |
+| `gcloud iam service-accounts list` | `Listed 0 items.` |
+| `gcloud artifacts repositories list` | Artifact Registry API disabled |
+| `gcloud storage buckets list` | No bucket names |
+
+No inventory command returned a VPC, address, router, cluster, service
+account, or bucket. Quota metrics were not returned.
+
+### IAM
+
+`gcloud projects get-iam-policy` for `user:michaelnguyen3790@gmail.com`
+showed `roles/owner` only.
+
+`projects.testIamPermissions` on the project granted all 19 permissions
+requested: `serviceusage.services.enable`, `serviceusage.services.get`,
+`compute.networks.create`, `compute.subnetworks.create`,
+`compute.routers.create`, `compute.routers.update`,
+`compute.firewalls.create`, `compute.instances.create`,
+`compute.disks.create`, `compute.addresses.create`,
+`container.clusters.create`, `container.clusters.get`,
+`container.clusters.update`, `iam.serviceAccounts.create`,
+`iam.serviceAccounts.actAs`, `iam.serviceAccounts.getIamPolicy`,
+`iam.serviceAccounts.setIamPolicy`, `resourcemanager.projects.getIamPolicy`,
+`resourcemanager.projects.setIamPolicy`. An earlier call that included
+`container.nodePools.create` returned HTTP 400 because that permission is
+not valid on the project resource. It was not retried at cluster scope,
+because there is no cluster.
+
+### Terraform variables and validation
+
+`infra/terraform/terraform.tfvars` sets `project_id =
+platformforge-dev-mn2026`, `region = us-central1`, `zone = us-central1-a`,
+and one `master_authorized_cidrs` entry named `operator`. Python
+`ipaddress` classified that CIDR as a global IPv4 `/32`. It was not
+documentation space, RFC1918, CGNAT, loopback, or link-local. It matched
+the address returned by `https://api.ipify.org` at check time.
+
+Default CIDR bounds were compared again: `10.10.0.0/22`, `10.20.0.0/16`,
+`10.30.0.0/20`, and `172.16.0.32/28` are pairwise disjoint. `us-central1-a`
+starts with `us-central1-`. This is the same arithmetic as M5.3. It is not
+a Terraform plan.
+
+Working directory `infra/terraform/`:
+
+```
+$ terraform fmt -check -recursive
+(no output, exit 0)
+
+$ terraform init -backend=false -input=false
+Reusing previous version of hashicorp/google from the dependency lock file
+Using previously-installed hashicorp/google v8.7.0
+Terraform has been successfully initialized!
+
+$ terraform validate
+Success! The configuration is valid.
+```
+
+`terraform.tfstate` and `terraform.tfstate.backup` were absent afterward.
+No plan file was written. `git status` for `infra/terraform` showed no
+change to `.terraform.lock.hcl`.
+
+### GKE and Istio matrices
+
+`get-server-config` did not return channel versions. Public pages read the
+same day:
+
+- Istio supported releases: 1.31 is supported, Kubernetes 1.32–1.37, and
+  1.31.2+ has no known CVEs on that page.
+- GKE release schedule: 1.36 has been available on Regular since 2026-06-09.
+  Regular availability for 1.37 is listed as 2026-10-21 with the page's
+  approximate-date note. The patch `1.36.4-gke.1495002` cited earlier was
+  not returned by this project's API and was not re-fetched from the release
+  notes (that fetch timed out).
+
+### What M5.5 still does not show
+
+- `terraform plan` or `terraform apply`.
+- A numeric quota.
+- A Cloud Billing Catalog price, or the $25 budget object.
+- The Kubernetes patch GKE would select at create time.
+- Istio or the observability stack on GKE.
+- Any change to the kind cluster.
+
+## M5.6 GKE workload preparation (read-only)
+
+Date: 2026-10-20, after the cluster existed. No `terraform apply`, no
+`terraform plan`, no `terraform destroy`, no API enablement, no IAM change,
+no Artifact Registry create, no image push, no `istioctl install`, no Helm
+install, and no `kubectl apply`. The current context was displayed and was
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`. Every cluster
+read used `--context` with that name. The kind cluster was not contacted.
+
+```
+$ gcloud container clusters describe platformforge-dev \
+    --zone us-central1-a --project platformforge-dev-mn2026
+status: RUNNING
+currentMasterVersion: 1.36.4-gke.1391002
+currentNodeCount: 1
+releaseChannel.channel: REGULAR
+networkConfig.datapathProvider: ADVANCED_DATAPATH
+privateClusterConfig.enablePrivateNodes: true
+workloadIdentityConfig.workloadPool: platformforge-dev-mn2026.svc.id.goog
+node machineType: e2-standard-4
+node version: 1.36.4-gke.1391002
+```
+
+`kubectl get nodes` showed one Ready node, `amd64`, kubelet
+`v1.36.4-gke.1391002`, allocatable CPU `3920m`, memory `13591632Ki`,
+ephemeral-storage `18828602911`, pods `64`, `EXTERNAL-IP` `<none>`,
+internal IP `10.10.0.3`. `kubectl top nodes` showed `183m` CPU and `1174Mi`.
+Pod requests summed to 13 pods, `665m` CPU, and `1169.5Mi`, all in
+`kube-system`. Namespaces were the GKE system set only. Every Service was
+`ClusterIP`. No Istio CRDs. No PersistentVolume or claim. Default
+StorageClass `standard-rwo`. Cilium `anetd` host paths included
+`/home/kubernetes/bin` and `/etc/cni/net.d`.
+
+`docker buildx imagetools inspect` on the two Dockerfile digest pins showed
+OCI indexes that include `linux/amd64` (and arm64 for the distroless index).
+No image was built or pushed.
+
+```
+$ .venv/bin/pytest -m "not integration" -q
+308 passed, 60 deselected, 1 warning in 1.60s
+
+$ make lint
+ruff check: all checks passed
+ruff format --check: 43 files already formatted
+
+$ make gke-preflight
+exit 0
+Server Version: v1.36.4-gke.1391002
+node Ready, EXTERNAL-IP <none>
+services all ClusterIP
+
+$ .venv/bin/python -m platformforge.gke publish-requirements
+exit 2
+```
+
+The unit total is 308, up from the 292 recorded when integration was last
+counted beside it. The 60 integration tests were deselected and were not run.
+The warning is the pre-existing Starlette `httpx` TestClient deprecation.
+
+### What M5.6 does not show
+
+- A pushed image, a digest lock with real digests, or a rendered manifest applied anywhere.
+- Istio, Helm, or application pods on GKE.
+- That the prepared requests still fit after those pods are actually scheduled.
+- Any change to the kind cluster.
+
+## M5.7 GKE install and verification
+
+Date: 2026-10-20. Context displayed and used for every cluster command:
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`. No
+`terraform apply`, `terraform destroy`, node-pool change, public Service, or
+PersistentVolumeClaim. The kind context was read once (`kubectl --context
+kind-platformforge get ns`); its namespaces were hours old and were not
+modified.
+
+Artifact Registry API was already enabled. Repository `platformforge` in
+`us-central1` did not exist and was created as a private Docker repository.
+IAM on that repository is only
+`roles/artifactregistry.reader` for
+`platformforge-dev-nodes@platformforge-dev-mn2026.iam.gserviceaccount.com`.
+No service-account key was created.
+
+`docker image inspect` reported `linux/amd64` and user `65532:65532` for the
+four built tags. No separate vulnerability scanner was installed. Pushed
+digests, also written to gitignored `deploy/gke/image-lock.yaml`:
+
+```
+inventory-service:0.1.0 sha256:a888c1bf6ab6c8e5a57d28ee010ffe206296e7b85a3f7dc58f7463b16a9f00ba
+inventory-service:0.2.0 sha256:e995d076aa876ac8c8d1b854e9364256b83a52162a871c63bfefffb28778abe4
+orders-service:0.2.0    sha256:8058e9e6934196bfc44749b579613b2d5225c787c1c710c0c8f624e57b643ac5
+```
+
+`orders-service:0.1.0` was also pushed
+(`sha256:0873f93be5242c887a48457d78453c5851dee9f9d23e6f2c2b2f140bb78e0277`)
+because `make images-gke VERSION=0.1.0` builds both services. It is not in
+the lock and is not deployed. The orders manifest is version 0.2.0.
+
+`istioctl version` reported client and control plane 1.31.2. `istiod` and
+`istio-cni-node` rolled out. Application pods were 2/2 with native
+`istio-proxy` sidecars, zero restarts, `runAsNonRoot`, read-only root, and
+`allowPrivilegeEscalation: false`. Every Service was ClusterIP. `kubectl get
+pvc -A` returned no resources.
+
+Authorized `GET /inventory/widget` from orders returned HTTP 200. The same
+call from `pf-test-client-mesh` (ServiceAccount `default`) returned HTTP 403
+`RBAC: access denied`. A plaintext request from `pf-test-client-plain` got
+`ConnectionResetError`. Inventory access logs showed
+`downstream_tls_version=TLSv1.3` and
+`downstream_peer_uri_san=spiffe://cluster.local/ns/platformforge-dev/sa/orders-service`.
+Destination `istio_requests_total` was `connection_security_policy=mutual_tls`
+for both the HTTP 200 and the HTTP 403.
+
+Stable routing sent the sample to subset `v0-1-0`. After the 90/10
+VirtualService, 200 orders checks split `v0.1.0=180` and `v0.2.0=20`. Stable
+weights `v0-1-0=100 v0-2-0=0` were restored.
+
+Grafana datasource health returned OK for Prometheus, Loki, and Tempo.
+Prometheus had 7 active targets, all up. A drill request id
+`gke-drill-1792543945-86` was in Loki on inventory-service
+(`message=injected failure`) with trace id
+`2f2eabaed68d6f58f9f946ffb8594dca`. Tempo returned that trace with spans
+`GET /orders/check/{item_id}` HTTP 502 and `GET /inventory/{item_id}` HTTP 500,
+both carrying the same request id. Orders status counts during the 100-request
+drill were `{"200": 89, "502": 11}`. Prometheus source counters for inventory
+HTTP 500 were 15 before the measured burst and 26 after it. Recovery after
+restoring failure percent 0 and stable routing was `{"200": 30}`.
+
+`kubectl top nodes` after the install: 627m CPU (15%) and 3028Mi memory (22%)
+on the one Ready node.
+
+```
+$ make test
+308 passed, 64 skipped, 1 warning in 1.18s
+
+$ PLATFORMFORGE_GKE_CONTEXT=gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev \
+    .venv/bin/pytest tests/gke -m gke -q
+4 passed in 14.70s
+```
+
+The 64 skipped tests are the 60 kind integration tests plus the 4 GKE tests,
+which skip unless `PLATFORMFORGE_GKE_CONTEXT` is set. The GKE tests were not
+part of `make test`. The warning is the pre-existing Starlette `httpx`
+TestClient deprecation. `make images-gke-publish` still exits 2.
+
+### What M5.7 does not show
+
+- `terraform plan` or `terraform apply` during this install.
+- A CVE scanner report. The image check was architecture and the non-root user.
+- Automated rollback. Recovery was applying the stable VirtualService and the
+  healthy canary manifest.
+- That Prometheus still has the destination `mutual_tls` series after the
+  drill. The surviving counter used for the live test is the source sidecar's
+  HTTP 500 total. Access logs remain the mTLS proof.
 
 ## What Milestone 3 evidence does not show
 

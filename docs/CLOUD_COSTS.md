@@ -1,12 +1,15 @@
 # Cloud costs
 
 Nothing in this estimate was provisioned. There is no confirmed charge.
-`gcloud` on this machine had no credentialed account and no project on
-2026-10-20, so the Cloud Billing Catalog was not queried. The figures below
-are published list prices, read that day, multiplied by 730 hours (24 × 365 /
-12). A negotiated contract, a tax, or a later price change is not included.
-E2 VMs have no automatic sustained-use discount. No committed-use discount is
-assumed.
+The figures below are published list prices, read on 2026-10-20, multiplied
+by 730 hours (24 × 365 / 12). A negotiated contract, a tax, or a later price
+change is not included. E2 VMs have no automatic sustained-use discount. No
+committed-use discount is assumed.
+
+The Cloud Billing Catalog was not queried. An earlier check that day had no
+credentialed account. A later readiness pass had an account and did not
+re-query the catalog. Billing on `platformforge-dev-mn2026` was verified
+enabled. The prices below are still list prices, not an invoice.
 
 The configuration priced is the Terraform default: one zonal Standard cluster
 in `us-central1-a`, one on-demand `e2-standard-4`, a 50 GB `pd-balanced` boot
@@ -48,7 +51,14 @@ cluster fees. It does not pay for VMs, disks, or NAT.
 | This is the billing account's only zonal or Autopilot cluster | $0.00 | $107.51 |
 | Another cluster already consumes the credit | $73.00 | $180.51 |
 
-Which row applies was not checked. There is no billing account on this machine.
+Which row applies was checked later on 2026-10-20, without creating
+resources. The open billing account has two projects:
+`platformforge-dev-mn2026` and `project-60f4c264-06bf-4137-83e`. Kubernetes
+Engine is disabled on both, and neither returned a cluster list. There is
+no positive evidence of another zonal or Autopilot cluster, so the
+free-tier row ($107.51 fixed) is the expected case. That is an inference
+from API status, not from a successful `clusters list`. A cluster created
+later on this billing account would move the bill to the $180.51 row.
 
 ## Example usage on top of the fixed subtotal
 
@@ -133,3 +143,27 @@ preemption of the only node takes the mesh and the telemetry stack with it.
 - Leaving the cluster running. There is no schedule that scales to zero.
 - `deletion_protection` does not affect the bill. It only blocks Terraform
   from deleting the cluster until it is set to false and applied.
+
+## Budget alert
+
+A $25 monthly alert was described for this project. The Cloud Billing Budget
+API (`billingbudgets.googleapis.com`) is disabled on
+`platformforge-dev-mn2026`, and the readiness pass did not enable it, so the
+budget object was not re-read. Treat $25 as a stated alert threshold.
+
+A budget alert does not stop spend and does not change this configuration.
+The one-node fixed estimate with the free tier available is $107.51 before
+any image pull or other egress. The alert should be expected to fire if the
+cluster is left running. It is not a spending cap.
+
+Charges this root can add, beyond the fixed lines above:
+
+| Source | What this configuration does |
+| --- | --- |
+| GKE management | $0.10/cluster/hour, expected to be covered by the free-tier credit while no other zonal or Autopilot cluster shares the billing account. `EXTENDED` is not the default, so the extended-support surcharge does not apply |
+| Compute Engine | One on-demand `e2-standard-4` at steady state. Create also brings up a default node pool of one VM and then deletes it. An upgrade can add a second `e2-standard-4` for the length of the surge |
+| Persistent disk | One 50 GB `pd-balanced` boot disk per node. No extra disk is declared. The temporary default-pool VM has its own boot disk for the length of create |
+| Cloud NAT | Gateway fee per VM-hour, one address at $0.005/hour, and $0.045/GiB processed. `AUTO_ONLY` can allocate more addresses if ports run out. Each extra address is another $3.65 at this list price |
+| Network egress | Premium Tier internet egress after the first 1 GiB. Private Google Access keeps Google API calls off NAT. Pods can still reach the public internet |
+| Artifact Registry | Not created. Storage and egress for a later registry are not in this estimate |
+| Logging and monitoring | System components only, expected to stay inside the 50 GiB and 150 MiB free allotments. That is not a measurement. NAT error logs are vended at $0.25/GiB with no free allotment. Workload logs stay in the cluster after Loki is installed. Managed Prometheus is off. Flow logs are off |

@@ -102,7 +102,9 @@ def require_approval(
     """Require explicit approval to use ``ctx``.
 
     ``approve_context`` is a non-interactive approval that must exactly match the current
-    context name; otherwise ``confirm`` is called to prompt the user.
+    context name; otherwise ``confirm`` is called to prompt the user. After approval,
+    only ``kind-*`` contexts may proceed. GKE inspection and later installs go through
+    ``deploy/gke`` with an explicit context, not through this CLI.
     """
     if approve_context is not None:
         if approve_context != ctx.name:
@@ -110,9 +112,14 @@ def require_approval(
                 f"--approve-context {approve_context!r} does not match current context "
                 f"{ctx.name!r}; refusing to continue"
             )
-        return
-    if not confirm(f"Use Kubernetes context {ctx.name!r}?"):
+    elif not confirm(f"Use Kubernetes context {ctx.name!r}?"):
         raise ContextError("kube context not approved; no cluster calls were made")
+    if not ctx.name.startswith("kind-"):
+        raise ContextError(
+            f"context {ctx.name!r} is not a kind cluster; deploy, status, and logs "
+            "refuse every non-kind context. GKE is prepared under deploy/gke and is "
+            "not applied by this CLI."
+        )
 
 
 def load_clients(ctx: KubeContext) -> KubeClients:

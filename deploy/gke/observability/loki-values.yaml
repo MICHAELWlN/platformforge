@@ -1,0 +1,16 @@
+# Overlay. Pass after deploy/observability/loki-values.yaml.
+# Filesystem storage stays on the pod emptyDir. No MinIO, no gateway, no disk.
+singleBinary:
+  persistence:
+    enabled: false
+  replicas: 1
+gateway:
+  enabled: false
+minio:
+  enabled: false
+lokiCanary:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false

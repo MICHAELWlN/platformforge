@@ -4,9 +4,9 @@ PlatformForge is an internal developer platform (IDP) portfolio project. Develop
 service in a small, validated YAML manifest; the `platformforge` CLI renders it into hardened
 Kubernetes resources and deploys it into an allowlisted namespace.
 
-> **Status: Milestones 1–4 are verified on a local kind cluster. Milestone 5 is Terraform
-> for a dedicated GKE development environment.** The Terraform configuration has been
-> formatted and validated. It has not been applied, and no GCP resources have been created.
+> **Status: Milestones 1–4 are verified on a local kind cluster. Milestone 5 is running
+> on the existing GKE cluster `platformforge-dev` in `us-central1-a`.** Workloads, Istio
+> 1.31.2, and the observability stack are installed there from digest-pinned images.
 > Nothing here is production-ready. MCP is not implemented. The CI workflow has been linted
 > and its steps replayed locally, but it has not yet run on GitHub (no remote). See
 > [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
@@ -203,7 +203,7 @@ Images: multi-stage `services/Dockerfile`, build stage `python:3.13-slim-trixie`
 `gcr.io/distroless/python3-debian13:nonroot` (no shell, no package manager, UID 65532), both
 pinned by digest. Runtime dependencies are exactly pinned in `services/requirements.txt`.
 
-## GCP development environment (defined, not provisioned)
+## GCP development environment
 
 `infra/terraform/` is a modular Terraform root for one zonal GKE Standard cluster in a
 dedicated VPC: private worker nodes, a public control-plane endpoint limited to named
@@ -211,10 +211,17 @@ CIDRs, Workload Identity, a least-privilege node service account, and Cloud NAT 
 nodes can pull images. The default location is `us-central1-a`. No load balancer is
 declared. Application Services stay ClusterIP; that rule is unchanged.
 
-Do not run `terraform apply` without explicit approval. The commands that have been run
-are format, init without a remote backend, and validate. Terraform does not install Istio
-or the observability charts. See [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md),
-[docs/TERRAFORM.md](docs/TERRAFORM.md), and [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md).
+The cluster `platformforge-dev` (`v1.36.4-gke.1391002`) is running with Istio 1.31.2,
+STRICT mTLS, the 100/0 stable inventory route, and Prometheus, Grafana, Loki, Tempo, and
+Alloy. Images are `linux/amd64` digests in Artifact Registry
+`us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge`. The real digests are
+in gitignored `deploy/gke/image-lock.yaml`. `make images` still builds `linux/arm64` for
+kind. `platformforge deploy` refuses any context that does not start with `kind-`; the
+GKE install used `kubectl`, `istioctl`, and Helm with an explicit context. Operations,
+the incident drill, and cleanup are in [docs/GKE_OPERATIONS.md](docs/GKE_OPERATIONS.md)
+and [docs/GKE_INCIDENT_DEMO.md](docs/GKE_INCIDENT_DEMO.md). Prices are in
+[docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md). Terraform layout is in
+[docs/TERRAFORM.md](docs/TERRAFORM.md).
 
 ## Testing
 

@@ -41,6 +41,7 @@ testpaths = ["tests"]
 pythonpath = ["services"]
 markers = [
     "integration: requires a local kind cluster; opt in with PLATFORMFORGE_IT_CONTEXT",
+    "gke: requires the existing GKE context; opt in with PLATFORMFORGE_GKE_CONTEXT",
 ]
 addopts = "-ra --strict-markers"
 

@@ -1,0 +1,14 @@
+# Copy to deploy/gke/image-lock.yaml after the three images have been pushed
+# and their digests have been read back from Artifact Registry.
+# image-lock.yaml is gitignored until those digests exist. The all-zero digests
+# below are placeholders and are rejected by check-lock. Do not commit a tag
+# in place of a digest. Kubernetes references are name@sha256, with no tag.
+apiVersion: platformforge.dev/v1alpha1
+kind: ImageLock
+registry: us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge
+images:
+  inventory-service:
+    "0.1.0": sha256:0000000000000000000000000000000000000000000000000000000000000000
+    "0.2.0": sha256:0000000000000000000000000000000000000000000000000000000000000000
+  orders-service:
+    "0.2.0": sha256:0000000000000000000000000000000000000000000000000000000000000000

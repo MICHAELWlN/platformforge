@@ -1,0 +1,106 @@
+# Istio 1.31.2 install configuration for the GKE cluster.
+# Not installed by this repository's preparation step.
+#
+# Install only after a separate approval, and only with an explicit context:
+#   istioctl install -f deploy/gke/istio-operator.yaml \
+#     --context gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev
+# Do not point this file at kind-platformforge. The kind install stays
+# deploy/istio/istio-operator.yaml.
+#
+# GKE differences from the kind file, and only those:
+# - CNI binary and config directories match the running Cilium anetd pod
+#   (/home/kubernetes/bin and /etc/cni/net.d). The plugin stays chained, so it
+#   does not replace Dataplane V2.
+# - pilot.cni.enabled is explicit, so the injector does not add istio-init.
+# - More namespaces are excluded from injection. platformforge-dev still opts
+#   in with its own namespace label. STRICT and the inventory AuthorizationPolicy
+#   are unchanged and are not in this file.
+# - The CNI DaemonSet also needs deploy/gke/istio-cni-resourcequota.yaml.
+#   GKE will not schedule system-node-critical pods in istio-system without it.
+#   The DaemonSet stays out of kube-system.
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: platformforge
+  namespace: istio-system
+spec:
+  profile: minimal
+  meshConfig:
+    accessLogFile: /dev/stdout
+    accessLogEncoding: JSON
+    accessLogFormat: |
+      {
+        "start_time": "%START_TIME%",
+        "method": "%REQ(:METHOD)%",
+        "path": "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+        "protocol": "%PROTOCOL%",
+        "response_code": "%RESPONSE_CODE%",
+        "response_code_details": "%RESPONSE_CODE_DETAILS%",
+        "response_flags": "%RESPONSE_FLAGS%",
+        "connection_termination_details": "%CONNECTION_TERMINATION_DETAILS%",
+        "request_id": "%REQ(X-REQUEST-ID)%",
+        "authority": "%REQ(:AUTHORITY)%",
+        "duration": "%DURATION%",
+        "downstream_remote_address": "%DOWNSTREAM_REMOTE_ADDRESS%",
+        "downstream_local_address": "%DOWNSTREAM_LOCAL_ADDRESS%",
+        "downstream_peer_uri_san": "%DOWNSTREAM_PEER_URI_SAN%",
+        "downstream_tls_version": "%DOWNSTREAM_TLS_VERSION%",
+        "requested_server_name": "%REQUESTED_SERVER_NAME%",
+        "upstream_cluster": "%UPSTREAM_CLUSTER%",
+        "upstream_host": "%UPSTREAM_HOST%",
+        "upstream_peer_uri_san": "%UPSTREAM_PEER_URI_SAN%",
+        "upstream_tls_version": "%UPSTREAM_TLS_VERSION%",
+        "upstream_transport_failure_reason": "%UPSTREAM_TRANSPORT_FAILURE_REASON%",
+        "trace_id": "%TRACE_ID%"
+      }
+    enableTracing: true
+    defaultConfig:
+      tracing: {}
+    extensionProviders:
+      - name: otel-tracing
+        opentelemetry:
+          service: tempo.platformforge-observability.svc.cluster.local
+          port: 4317
+  components:
+    cni:
+      enabled: true
+      namespace: istio-system
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+  values:
+    pilot:
+      autoscaleEnabled: false
+      replicaCount: 1
+      cni:
+        enabled: true
+    cni:
+      chained: true
+      cniBinDir: /home/kubernetes/bin
+      cniConfDir: /etc/cni/net.d
+      excludeNamespaces:
+        - kube-system
+        - istio-system
+        - platformforge-observability
+        - gke-managed-system
+        - gke-managed-networking-dra-driver
+        - gke-managed-volumepopulator
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+    global:
+      proxy:
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi

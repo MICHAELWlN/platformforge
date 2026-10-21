@@ -190,28 +190,34 @@ Istio 1.31.2 on the existing `kind-platformforge` cluster (Kubernetes v1.37.0). 
   as timeouts to 9411 and 14268 from the plaintext test client.
 - No metric-based promotion or automated rollback. The drill is still a manual manifest
   change, now visible in Prometheus.
-- Not run on GKE. Terraform for a development cluster is written in Milestone 5 and has not been applied.
+- The Milestone 4 test run itself was on kind. The same stack was later installed on GKE; that evidence is Milestone 5.
 
-## Milestone 5: GKE Terraform (not provisioned)
+## Milestone 5: GKE cluster with the platform installed
 
-Definitions live in `infra/terraform/`. Procedures and the cost estimate are in
-[docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md), [docs/TERRAFORM.md](docs/TERRAFORM.md),
-and [docs/CLOUD_COSTS.md](docs/CLOUD_COSTS.md). Evidence is in TEST_EVIDENCE.md.
-`terraform apply` has not been run. No GCP resource was created. The kind cluster was
-not modified.
+The cluster `platformforge-dev` in `us-central1-a` is running at
+`v1.36.4-gke.1391002`. This sprint did not run `terraform apply` or
+`terraform destroy`. It created one private Artifact Registry repository,
+pushed `linux/amd64` images, and installed Istio, the applications, and
+observability on the existing cluster. The kind cluster was not modified.
+Evidence is in TEST_EVIDENCE.md. Operations are in
+[docs/GKE_OPERATIONS.md](docs/GKE_OPERATIONS.md).
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| Provider pin and modular root (VPC, subnet, NAT, firewall, IAM, zonal GKE, node pool, outputs) | Written | `terraform fmt -check`, `init -backend=false`, `validate` |
-| Private nodes, authorized control-plane networks, Workload Identity, least-privilege node IAM | Written | same validation; checkov 3.3.30 |
-| Apply, plan, or a live cluster | Not run | no credentialed gcloud account and no project; apply was not requested |
-| Artifact Registry and GKE workload deploy | Not started | images are still local kind loads |
-| Istio and observability on GKE | Not started | still kind-only |
+| Provider pin and modular root (VPC, subnet, NAT, firewall, IAM, zonal GKE, node pool, outputs) | Applied earlier by the operator; this sprint did not apply | `terraform fmt -check`, `init -backend=false`, `validate` |
+| Private nodes, authorized control-plane networks, Workload Identity, least-privilege node IAM | Running | cluster describe; one Ready node, no external IP |
+| Artifact Registry `platformforge` in `us-central1` | Private Docker repository. Node SA has repository-scoped `roles/artifactregistry.reader` | `gcloud artifacts repositories describe` and `get-iam-policy` |
+| Images | Pushed `linux/amd64`, user `65532:65532`. Digests in gitignored `deploy/gke/image-lock.yaml` | `docker image inspect`, `gcloud artifacts docker images describe` |
+| Istio 1.31.2 | Installed with the GKE operator file. istiod and CNI Ready. No gateway. Services are ClusterIP | `istioctl version`, `kubectl get pods,svc -n istio-system` |
+| Applications | orders 0.2.0 and inventory 0.1.0 / 0.2.0 Ready, non-root, read-only root, native sidecars | rollout status and pod securityContext |
+| STRICT mTLS and authorization | Enforced | destination `mutual_tls` plus `TLSv1.3` and orders SPIFFE on the inventory access log; default SA gets HTTP 403; plaintext is reset |
+| Canary | Measured 180/20 on 200 requests, then restored to 100/0 | orders sidecar `istio_requests_total` |
+| Observability | Prometheus, Grafana, Loki, Tempo, Alloy Ready. No PVCs. Grafana health OK for all three datasources | in-cluster queries |
+| Incident drill | Faulty canary produced 11/100 orders HTTP 502 and inventory HTTP 500, then healthy 0 and stable 100/0 were restored. Recovery traffic was 30/30 HTTP 200 | Prometheus, Loki, Tempo |
 
 ### Known limitations of Milestone 5
 
-- Validation does not prove the stack can be created. Preconditions that compare CIDRs
-  run at plan time, and plan was not run.
+- This sprint did not re-run `terraform plan` or `terraform apply`.
 - The control-plane endpoint is public, limited to `master_authorized_cidrs`. A private
   endpoint is a variable, default off, because this environment has no bastion or VPN.
 - Worker egress to the internet is allowed through Cloud NAT. There is no default-deny
@@ -221,23 +227,32 @@ not modified.
 - The cluster resource has no `node_config` because the default pool is removed. The
   lasting node pool sets the GKE Metadata Server. Checkov CKV_GCP_69 fails on the
   cluster resource and passes on the node pool.
-- One zone. The GKE free-tier credit can cover the management fee only when this is the
-  billing account's zonal or Autopilot cluster. That was not checked against a billing
-  account.
+- One zone. The GKE free-tier credit covers the management fee only while this is the
+  billing account's only zonal or Autopilot cluster. This cluster now occupies that slot.
+- `make images` still defaults to `linux/arm64` for kind. GKE runs the amd64
+  digests. `make images-gke-publish` still exits 2; the push in this sprint was
+  a direct `docker push` after the repository existed.
 - Local Terraform state until a private GCS bucket is approved.
 - Service type LoadBalancer is not blocked by an admission controller. PlatformForge
   still refuses to render one. The GCE Ingress add-on is disabled.
-- `platformforge/*` images cannot be pulled by GKE until they are in a registry.
+- `platformforge deploy` still refuses the GKE context. Re-deploys are
+  `gke.py render` plus `platformforge deploy --dry-run` plus `kubectl apply`
+  with the pinned context.
+- Client-side Istio metrics label `connection_security_policy` as `unknown`.
+  mTLS evidence is the destination sidecar stat and the access log
+  (`downstream_tls_version=TLSv1.3`).
+- Telemetry disks are emptyDir. A Prometheus restart drops the drill counters.
+  Loki and Tempo kept the drill log and trace through the verification window.
 
 ## Later milestones
 
 | Area | Status |
 | --- | --- |
-| Terraform (VPC, Cloud NAT, zonal GKE, Workload Identity, node IAM) | **Written and statically validated.** Not applied |
-| Artifact Registry | Not started |
-| GKE workload deployment | Not started. Do not start without explicit approval |
-| Istio (STRICT mTLS, traffic management, canary) | **Verified on local kind** (Milestone 3); not on GKE |
-| OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on local kind** (Milestone 4); not on GKE |
-| CD (publish images, deploy from CI) | Not started |
+| Terraform (VPC, Cloud NAT, zonal GKE, Workload Identity, node IAM) | **Cluster running.** This sprint did not apply or destroy |
+| GKE workload install (images, Istio, observability, apps) | **Installed** on the existing cluster. CLI still refuses the GKE context |
+| Artifact Registry | **One private repository** `platformforge` in `us-central1` |
+| Istio (STRICT mTLS, traffic management, canary) | **Verified on kind and on this GKE cluster** |
+| OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on kind and on this GKE cluster** |
+| CD (publish images, deploy from CI) | Not started. This is the next milestone |
 | Read-only MCP server | Not started |
-| Incident simulation and rollback | Canary drill is visible in metrics, traces, and logs. No automated rollback |
+| Incident simulation and rollback | Manual drill verified on GKE. No automated rollback |

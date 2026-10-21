@@ -177,9 +177,18 @@ local backend and still does not create GCP resources.
 
 These commands do not prove the stack can be created. They prove the
 configuration parses, the provider schema accepts the arguments, and the
-module references line up. They do not check quotas, org policies, IAM on the
-caller, stock, or the overlap precondition. `terraform plan` was not run:
-this machine had no credentialed `gcloud` account and no project.
+module references line up. They do not check quotas or the overlap
+precondition. The same three commands were run again during the 2026-10-20
+readiness pass and succeeded. No state file was created.
+
+`terraform plan` was still not run. The machine now has a credentialed
+account and `terraform.tfvars` for `platformforge-dev-mn2026`. Plan was not
+approved. Compute Engine and Kubernetes Engine are disabled, so a plan
+cannot refresh those resources until the APIs are enabled. Enabling Compute
+Engine can create the default VPC. That step needs its own approval. See
+[GKE_DEPLOYMENT.md](GKE_DEPLOYMENT.md). The caller has `roles/owner`, and
+the project has no organization parent, so an org policy is not an extra
+gate. Regional quota is still unread.
 
 Do not run `terraform apply` or `terraform destroy` unless that exact action
 has been approved. See [GKE_DEPLOYMENT.md](GKE_DEPLOYMENT.md).

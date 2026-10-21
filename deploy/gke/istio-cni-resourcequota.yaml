@@ -1,0 +1,21 @@
+# Lets the Istio CNI DaemonSet use PriorityClass system-node-critical in
+# istio-system. GKE refuses that priority class outside kube-system unless a
+# ResourceQuota selects it. The quota is namespace-scoped. It does not grant
+# cluster-admin and it does not move the DaemonSet into kube-system.
+# Apply only with the pinned GKE context, after istio-system exists, and before
+# istioctl install. pods: "10" covers a 2-node pool plus a surge replacement.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: istio-cni
+  namespace: istio-system
+  labels:
+    app.kubernetes.io/part-of: platformforge
+spec:
+  hard:
+    pods: "10"
+  scopeSelector:
+    matchExpressions:
+      - operator: In
+        scopeName: PriorityClass
+        values: ["system-node-critical"]

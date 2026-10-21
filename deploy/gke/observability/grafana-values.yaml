@@ -1,0 +1,12 @@
+# Overlay. Pass after deploy/observability/grafana-values.yaml.
+# Anonymous viewer is off on GKE. The chart-generated admin Secret is the login.
+# No disk, no public Service. Kind keeps its own values file.
+grafana.ini:
+  auth.anonymous:
+    enabled: false
+persistence:
+  enabled: false
+service:
+  type: ClusterIP
+initChownData:
+  enabled: false

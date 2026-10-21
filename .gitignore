@@ -34,3 +34,5 @@ override.tf.json
 infra/terraform/terraform.tfvars
 infra/terraform/*.auto.tfvars
 !infra/terraform/terraform.tfvars.example
+# Real image digests are written here after a registry publish. The example stays tracked.
+deploy/gke/image-lock.yaml

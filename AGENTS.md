@@ -15,7 +15,11 @@ Instructions for AI coding agents (Cursor, etc.) working in this repository.
 4. **Never hardcode or commit credentials.** No tokens, keys, kubeconfigs, service-account
    JSON, or `.tfstate` in the repo. Manifests reject credential-like env var names by design.
 5. **Kubernetes context:** before any cluster command, display the current context and get
-   approval. Only kind contexts (`kind-*`) may be used for automated tests.
+   approval. The kind integration suite runs only on `kind-*`. The CLI refuses any other
+   context. GKE live tests are a separate marker and run only when
+   `PLATFORMFORGE_GKE_CONTEXT` is the pinned context in `src/platformforge/gke.py`.
+   Do not install Istio, Helm charts, or application manifests on GKE unless that exact
+   step was approved. The approved install is recorded in `docs/GKE_OPERATIONS.md`.
 6. **Namespace scope:** only `platformforge-dev` (the allowlist in
    `src/platformforge/manifest.py`). Never modify workloads in other namespaces. Expanding the
    allowlist is a reviewed code change, never a runtime option.
@@ -47,13 +51,15 @@ services/
   manifests/incidents/ Drill-only manifests (faulty canary); never the default deploy path
   Dockerfile          Multi-stage; --target inventory-service | orders-service
   requirements.txt    Exact runtime pins for the images
+deploy/gke/       GKE install config: Istio operator, CNI quota, Helm overlays, gitignored image lock
 deploy/istio/     istioctl install config + istio-system namespace (PSA privileged for CNI)
 deploy/istio/platformforge-dev/  Reviewed mesh policy: PeerAuthentication, AuthorizationPolicy,
                   DestinationRule, VirtualService (stable 100/0, canary 90/10), Telemetry tracing
 deploy/observability/  Helm values for Prometheus, Grafana, Loki, Tempo, Alloy; namespace;
                   Tempo NetworkPolicy; Prometheus ClusterRole; Grafana dashboard
 docs/             ISTIO.md, CANARY_RELEASE.md, INCIDENT_RUNBOOK.md, OBSERVABILITY.md,
-                  TRACING.md, OBSERVABILITY_RUNBOOK.md, GKE_DEPLOYMENT.md, TERRAFORM.md,
+                  TRACING.md, OBSERVABILITY_RUNBOOK.md, GKE_DEPLOYMENT.md, GKE_OPERATIONS.md,
+                  GKE_INCIDENT_DEMO.md, TERRAFORM.md,
                   CLOUD_COSTS.md
 infra/terraform/  GKE development stack (VPC, NAT, zonal Standard cluster, IAM).
                   Validate only unless apply is explicitly approved. State is local and gitignored.
@@ -74,6 +80,8 @@ make lint                     # ruff check + format check on src, services, test
 make test                     # unit tests (integration skipped)
 make images kind-load         # build arm64 0.2.0 images and load them into kind-platformforge
 make images kind-load VERSION=0.1.0   # inventory 0.1.0 (stable) for the canary tests
+make images-gke               # local linux/amd64 build for GKE. Does not push or create a registry
+make gke-preflight            # read-only kubectl get against the pinned GKE context
 make integration              # PLATFORMFORGE_IT_CONTEXT=kind-platformforge pytest -m integration -v
 .tools/istio-1.31.2/bin/istioctl analyze -n platformforge-dev --context kind-platformforge  # read-only
 make terraform-validate   # fmt -check, init -backend=false, validate. Does not plan or apply.
@@ -144,10 +152,12 @@ Service dependency pins live in two places and must match: `services/requirement
 - The root is `infra/terraform/`. `terraform apply`, `terraform destroy`, and
   `gcloud` commands that create or enable billable resources need explicit approval.
   `terraform fmt`, `init -backend=false`, and `validate` do not.
-- Do not point `make integration` or any kind test at a GKE context. Automated tests
-  stay on `kind-*`.
-- This stack does not modify the local kind cluster and does not install Istio,
-  the observability charts, or Artifact Registry.
+- Do not point `make integration` or any kind test at a GKE context. Kind tests stay
+  on `kind-*`. GKE checks are `pytest -m gke` with `PLATFORMFORGE_GKE_CONTEXT` set to
+  the pinned context.
+- Terraform does not modify the local kind cluster and does not install Istio, the
+  observability charts, or Artifact Registry. Those were installed separately on the
+  existing cluster; do not repeat that install without approval.
 - Do not commit `terraform.tfstate`, plan files, tfvars with operator addresses, or
   credentials. The provider block has no key file.
 - Do not weaken STRICT mTLS, add a public Service, or open the control plane to

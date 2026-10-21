@@ -1,0 +1,6 @@
+# Overlay. Pass after deploy/observability/tempo-values.yaml.
+persistence:
+  enabled: false
+service:
+  type: ClusterIP
+replicas: 1
