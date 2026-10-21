@@ -250,8 +250,9 @@ CI (`.github/workflows/ci.yml`) runs Ruff, unit tests, Terraform validation,
 manifest checks, a secret scan, `pip-audit`, and both `linux/amd64` image
 builds with a read-only smoke run and a Trivy scan. It uses no secrets and no
 cluster.
-`.github/workflows/delivery.yml` is manual, stays off until
-`GCP_DELIVERY_ENABLED` is set, and refuses to apply to GKE. See
+`.github/workflows/delivery.yml` is manual. Environment `gke-delivery`
+requires a review and allows only `main`. One approved `0.2.0` publish
+succeeded. The workflow still refuses to apply to GKE. See
 [docs/CI_CD.md](docs/CI_CD.md).
 
 Recorded results are in [TEST_EVIDENCE.md](TEST_EVIDENCE.md).
@@ -278,6 +279,11 @@ Removing Istio itself is described in [docs/ISTIO.md](docs/ISTIO.md#cleanup-manu
 - [docs/OBSERVABILITY_RUNBOOK.md](docs/OBSERVABILITY_RUNBOOK.md): drill investigation and cleanup
 - [docs/GKE_DEPLOYMENT.md](docs/GKE_DEPLOYMENT.md): GKE design, access, apply, and destroy
 - [docs/CI_CD.md](docs/CI_CD.md): CI jobs, GitHub OIDC, and the gated publish workflow
+- [docs/MCP_SERVER.md](docs/MCP_SERVER.md): read-only local MCP server and its tools
+- [docs/MCP_SECURITY.md](docs/MCP_SECURITY.md): allowlists, redaction, and auth assumptions
+- [docs/MCP_INCIDENT_INVESTIGATION.md](docs/MCP_INCIDENT_INVESTIGATION.md): how to read an investigation report
+- [docs/MCP_LIVE_INTEGRATION.md](docs/MCP_LIVE_INTEGRATION.md): kind reader identity and live tool results
+- [docs/MCP_GKE_INTEGRATION.md](docs/MCP_GKE_INTEGRATION.md): GKE reader identity and live tool results
 - [docs/PROGRESSIVE_DELIVERY.md](docs/PROGRESSIVE_DELIVERY.md): canary decision rules
 - [docs/ROLLBACK_RUNBOOK.md](docs/ROLLBACK_RUNBOOK.md): restore the last known-good route
 - [docs/TERRAFORM.md](docs/TERRAFORM.md): Terraform layout, state, and commands

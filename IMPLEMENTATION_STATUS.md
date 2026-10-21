@@ -257,8 +257,8 @@ with one node, and the inventory VirtualService was `v0-1-0=100 v0-2-0=0`.
 | Item | Status | Evidence |
 | --- | --- | --- |
 | CI lint, tests, Terraform, manifests, secret scan, pip-audit, image scan config | Written | `make lint`, `make test` 335 passed, `terraform validate`, secret scan clean |
-| GitHub OIDC and delivery IAM | Prepared, disabled | Module count is 0. Zonal IAM condition matches the live selfLink. Not applied |
-| Image publish workflow | Manual and gated by `GCP_DELIVERY_ENABLED` | `.github/workflows/delivery.yml`. Not dispatched |
+| GitHub OIDC and delivery IAM | Applied | State contains the 11 delivery resources. This pass did not apply again |
+| Image publish workflow | One `0.2.0` publish succeeded | Run 39546044442. Cluster digests were not changed |
 | Canary decision and idempotent rollback plan | Unit-tested | `tests/unit/test_delivery.py` |
 | Live GKE promotion | Not run | `refuse-apply` exits 2 |
 
@@ -266,22 +266,95 @@ with one node, and the inventory VirtualService was `v0-1-0=100 v0-2-0=0`.
 
 - The decision function has not been fed a live Prometheus response from this
   milestone. GKE routing was only read.
-- `terraform plan` was not run, so this pass does not claim the refreshed
-  plan is empty. The new module has `count = 0` unless the variable is set.
-- The cluster IAM condition now uses the zonal resource name
-  `projects/platformforge-dev-mn2026/zones/us-central1-a/clusters/platformforge-dev`,
-  which matches the live selfLink. It has not been applied, so the condition
-  has not been exercised by a token exchange.
-- GitHub account `MICHAELWlN` is authenticated. Repository
-  `MICHAELWlN/platformforge` does not exist and this tree has no remote.
-  `GCP_DELIVERY_ENABLED` is not set. The `gke-delivery` environment cannot
-  be protected until the repository exists.
+- The 11 GitHub delivery resources are in state. A plan after that apply
+  reported no changes. This pass did not apply or destroy.
+- The cluster IAM condition uses
+  `projects/platformforge-dev-mn2026/zones/us-central1-a/clusters/platformforge-dev`.
+  The publish run authenticated with that provider. It did not call kubectl.
+- `MICHAELWlN/platformforge` is public. Environment `gke-delivery` requires
+  reviewer `MICHAELWlN`, blocks admin bypass, and allows only `main`.
+  `prevent_self_review` is false because that owner is the only reviewer.
+  `GCP_DELIVERY_ENABLED` is `true`.
+- The new `0.2.0` digests are in Artifact Registry. The running Deployments
+  still use the previous digests.
 - `deploy/gke/delivery-rbac.yaml` is not applied, so the delivery account
   cannot patch workloads even after OIDC exists.
-- GitHub will create environment `gke-delivery` without reviewers on first
-  use. Create the environment with required reviewers before setting
-  `GCP_DELIVERY_ENABLED`. `github_repository` stays empty until that
-  repository exists.
+- `main` has no branch protection. The environment policy is the ref gate.
+
+## Milestone 7A: read-only MCP server, not connected live
+
+`src/platformforge/mcp_server/` is a stdio MCP server on `mcp` 2.3.0. Twelve
+tools list or read Kubernetes objects and loopback telemetry. Unit tests use
+fakes. This pass did not start a long-running server, did not port-forward,
+and did not call the GKE or kind API.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| stdio server and tool registration | Implemented | In-memory MCP client lists 12 tools |
+| Context and namespace allowlists | Implemented | Rejection tests |
+| Read-only Kubernetes wrapper | Implemented | Delete and Secret calls raise |
+| Incident report | Implemented | `verified_root_cause` is null |
+| Live GKE or kind use | Not run | No cluster command in this milestone |
+
+### Known limitations of Milestone 7A
+
+- The kubeconfig user is whatever the operator already has. The server does
+  not narrow GKE IAM.
+- Observability tools do nothing useful until the operator port-forwards to
+  loopback. They were not pointed at the cluster.
+- `istio-system` is outside the namespace allowlist.
+- Log text can still contain a sentence that looks like an instruction. It is
+  wrapped as untrusted data and is not executed.
+
+## Milestone 7B: kind live reads
+
+The reader ServiceAccount, Role, and RoleBinding in
+`deploy/kind/mcp-reader.yaml` are applied on `kind-platformforge` only.
+Live tool calls used a one-hour token for that account. Prometheus, Loki,
+and Tempo were reached through `127.0.0.1` port-forwards. GKE was not called.
+The current kubeconfig context stayed
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Reader RBAC | Applied on kind | SelfSubjectAccessReview in `tests/integration/test_mcp_live.py` |
+| Twelve MCP tools | Passed against kind | Same test, in-process MCP client |
+| Incident report | `verified_root_cause` null | Retained `istio_requests_total` includes HTTP 500 and 503 |
+| Tempo traces | None retained | Search returned no traces. A lookup reported the id missing |
+| GKE | Not used | Context was displayed and left unchanged |
+
+### Known limitations of Milestone 7B
+
+- Kind images are tags, so `get_deployment_status` reports `immutable: false`.
+- The 15-minute Loki window contained three `istio-proxy` lines and no
+  `inventory-service` container lines. No request id was available to join
+  to the Prometheus counters.
+- Tempo's disk is emptyDir. No trace was available to correlate.
+- The reader cannot read `platformforge-observability` or `istio-system`.
+  Port-forwards are an operator action.
+- GKE still has no reader ServiceAccount.
+
+## Milestone 7C: GKE live reads
+
+`deploy/gke/mcp-reader.yaml` is applied on the pinned GKE context only.
+Live tool calls used a one-hour token for that account. GKE calls without
+`PLATFORMFORGE_MCP_KUBECONFIG` are rejected. Prometheus, Loki, and Tempo were
+reached through `127.0.0.1` port-forwards. The kind cluster was not contacted.
+Routing stayed `v0-1-0=100`, `v0-2-0=0`.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Reader RBAC | Applied on GKE | SelfSubjectAccessReview in `tests/integration/test_mcp_gke.py` |
+| Twelve MCP tools | Passed against GKE | Same test, in-process MCP client, 2 passed |
+| Canary image | Digest-pinned | `sha256:e995d076aa876ac8c8d1b854e9364256b83a52162a871c63bfefffb28778abe4` |
+| Incident report | `verified_root_cause` null | Prometheus still has 26 HTTP 500 samples |
+| Tempo and inventory logs | Not in the 15-minute window | Reported as missing, not as a healthy zero |
+
+### Known limitations of Milestone 7C
+
+- The operator client still mints the token and opens the port-forwards.
+- No request id or trace id joins the retained HTTP 500 counter to one span.
+- The reader cannot list `platformforge-observability` or `istio-system`.
 
 ## Later milestones
 
@@ -292,6 +365,6 @@ with one node, and the inventory VirtualService was `v0-1-0=100 v0-2-0=0`.
 | Artifact Registry | **One private repository** `platformforge` in `us-central1` |
 | Istio (STRICT mTLS, traffic management, canary) | **Verified on kind and on this GKE cluster** |
 | OpenTelemetry, Prometheus, Loki, Tempo, Grafana | **Verified on kind and on this GKE cluster** |
-| CD (publish images, deploy from CI) | **Workflow and gates written.** Publish and apply were not run |
-| Read-only MCP server | Not started. This is the next milestone |
+| CD (publish images, deploy from CI) | **Publish verified.** One `0.2.0` push succeeded. Cluster deploy from CI is still refused |
+| Read-only MCP server | **Kind and GKE live checks passed** as separate `platformforge-mcp-reader` tokens |
 | Incident simulation and rollback | Manual drill verified on GKE. Automated rollback is planned and unit-tested, not executed on the cluster |

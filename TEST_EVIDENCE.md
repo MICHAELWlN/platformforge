@@ -1346,6 +1346,302 @@ warning is the pre-existing Starlette `httpx` TestClient deprecation.
 - A workflow run, an image push, or a token exchange.
 - Any change to cluster workloads.
 
+## M6.3 GitHub environment and Terraform plan
+
+Date: 2026-10-21. `origin` is
+`https://github.com/MICHAELWlN/platformforge.git`. `main` is `bcb2bb6` and
+matches `origin/main`. The repository is public. No GitHub secret or variable
+is set. The delivery workflow was not dispatched. `terraform apply` was not
+run. The kind cluster and the GKE workloads were not changed.
+
+```
+$ gh api repos/MICHAELWlN/platformforge/environments/gke-delivery \
+    --jq '{name,can_admins_bypass,rules:[.protection_rules[].type],prevent_self_review:.protection_rules[0].prevent_self_review,reviewer:.protection_rules[0].reviewers[0].reviewer.login}'
+name: gke-delivery
+can_admins_bypass: false
+rules: required_reviewers, branch_policy
+prevent_self_review: false
+reviewer: MICHAELWlN
+
+$ gh api repos/MICHAELWlN/platformforge/environments/gke-delivery/deployment-branch-policies \
+    --jq '{total_count,names:[.branch_policies[].name]}'
+total_count: 1
+names: ["main"]
+```
+
+`main` has no branch protection rule. The cluster was `RUNNING` at
+`1.36.4-gke.1391002` with one node. Artifact Registry repository
+`platformforge` was still present. Service account `platformforge-dev-cd`
+was still absent. The only workload identity pool was
+`platformforge-dev-mn2026.svc.id.goog`.
+
+```
+$ terraform -chdir=infra/terraform fmt -check -recursive
+$ terraform -chdir=infra/terraform validate
+Success! The configuration is valid.
+
+$ terraform -chdir=infra/terraform plan -input=false -out=github-delivery.tfplan
+Plan: 11 to add, 0 to change, 0 to destroy.
+```
+
+The JSON plan has 32 resources, of which 21 are `no-op`. The 11 creates are
+only `module.github_delivery`. No cluster, network, or node IAM address
+changes. The plan file is gitignored. It was not applied.
+
+```
+$ make lint
+ruff check: all checks passed
+ruff format --check: 49 files already formatted
+
+$ make test
+335 passed, 64 skipped, 1 warning in 1.59s
+
+$ python -m platformforge.secretscan
+secret scan clean
+```
+
+The 64 skips are the 60 kind integration tests and the 4 GKE tests. The
+warning is the pre-existing Starlette `httpx` TestClient deprecation.
+
+### What M6.3 does not show
+
+- An applied Workload Identity pool or a delivery service account.
+- A GitHub Actions run, an image push, or an OIDC token exchange.
+- A second required reviewer. `prevent_self_review` is false.
+- A changed VirtualService or Deployment.
+
+## M6.4 GitHub OIDC publish
+
+Date: 2026-10-21. The 11 delivery resources were already in Terraform state.
+This pass did not run `terraform apply` or `terraform destroy`. No Kubernetes
+object was changed. The kind cluster was not contacted.
+
+```
+$ terraform -chdir=infra/terraform output -raw github_workload_identity_provider
+projects/345366894072/locations/global/workloadIdentityPools/platformforge-github/providers/github-actions
+
+$ terraform -chdir=infra/terraform output -raw github_delivery_service_account
+platformforge-dev-cd@platformforge-dev-mn2026.iam.gserviceaccount.com
+```
+
+The live provider is ACTIVE. Its issuer is
+`https://token.actions.githubusercontent.com`. Its condition is repository
+`MICHAELWlN/platformforge`, ref `refs/heads/main`, and environment
+`gke-delivery`. The delivery account has no user-managed key. Its only
+project role is `platformforgeDeliveryClusterGet`, conditioned on the zonal
+cluster. Artifact Registry binds `platformforgeDeliveryPublisher` on
+repository `platformforge` and `roles/artifactregistry.reader` on the node
+account. Neither binding is Editor or Owner.
+
+Repository variables were set to those two Terraform outputs and then read
+back. `GCP_DELIVERY_ENABLED` was set to `true` only after that match.
+No GitHub secret was created.
+
+```
+$ gh workflow run delivery.yml --ref main -f publish=true -f version=0.2.0
+https://github.com/MICHAELWlN/platformforge/actions/runs/39546044442
+```
+
+The `gke-delivery` review was approved by `MICHAELWlN`, the only configured
+reviewer. Conclusion: `success`. Head `55f7f4c`. The auth step, the
+`linux/amd64` and `65532:65532` checks, Trivy, and the push all passed. The
+gate printed `apply remains refused`.
+
+Artifact Registry describes the tags as:
+
+```
+inventory-service:0.2.0
+sha256:52c704a597302abbf25e19cb011592e9df22941ffc3a9ba949a58b7cc33a45bf
+
+orders-service:0.2.0
+sha256:038cdce9303a95716b94a7759a107eae20b336954f343aa9cb61abbce6dc8b06
+```
+
+The registry config blobs for those digests are `linux`, `amd64`, and user
+`65532:65532`.
+
+After the run, context
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev` still had:
+
+```
+inventory-service-v0-1-0  @sha256:a888c1bf6ab6c8e5a57d28ee010ffe206296e7b85a3f7dc58f7463b16a9f00ba  ready=2
+inventory-service-v0-2-0  @sha256:e995d076aa876ac8c8d1b854e9364256b83a52162a871c63bfefffb28778abe4  ready=1
+orders-service            @sha256:8058e9e6934196bfc44749b579613b2d5225c787c1c710c0c8f624e57b643ac5  ready=2
+inventory VirtualService  v0-1-0=100 v0-2-0=0
+Services                  ClusterIP
+```
+
+### What M6.4 does not show
+
+- A rollout onto those new digests.
+- A canary weight change.
+- A second required reviewer. `prevent_self_review` remains false.
+- `deploy/gke/delivery-rbac.yaml` applied.
+
+## M7.1 Read-only MCP server
+
+Date: 2026-10-21. Local code and unit tests only. `mcp` 2.3.0 was installed
+into `.venv` from PyPI. No MCP process was left running. No port-forward, no
+`kubectl`, no `terraform`, and no workflow dispatch.
+
+```
+$ .venv/bin/python -c "import platformforge.mcp_server as m; print(type(m.build_server()).__name__)"
+MCPServer
+
+$ make lint
+ruff check: All checks passed
+ruff format --check: passed
+
+$ make test
+346 passed, 64 skipped
+```
+
+`tests/unit/test_mcp.py` covers context and namespace rejection, the
+read-only wrapper, log bounds and redaction, PromQL and LogQL rejection,
+timeouts, missing telemetry, incident classification with a null verified
+root cause, and an in-memory MCP client that lists the 12 tools. The 64
+skips are the existing kind and GKE tests. `PLATFORMFORGE_IT_CONTEXT` and
+`PLATFORMFORGE_GKE_CONTEXT` were unset.
+
+### What M7.1 does not show
+
+- A tool call against kind or GKE.
+- A live Prometheus, Loki, or Tempo response.
+- A change to cluster objects, IAM, or published images.
+
+## M7.2 Kind reader and live MCP tools
+
+Date: 2026-10-21. Current context before and after every command:
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`.
+Cluster commands used `--context kind-platformforge`. No GKE object was
+read or changed. No Deployment, VirtualService, or AuthorizationPolicy was
+edited. The port-forwards bound `127.0.0.1` only and were stopped after the
+checks. The reader token was not written into the repo.
+
+```
+$ kubectl --context kind-platformforge apply -f deploy/kind/mcp-reader.yaml
+serviceaccount/platformforge-mcp-reader created
+role.rbac.authorization.k8s.io/platformforge-mcp-reader created
+rolebinding.rbac.authorization.k8s.io/platformforge-mcp-reader created
+```
+
+`kubectl auth can-i` as `system:serviceaccount:platformforge-dev:platformforge-mcp-reader`
+returned yes for get/list pods, get pods/log, get/list services, get endpoints,
+list events, and get/list deployments.apps in `platformforge-dev`. It returned
+no for secrets, pods/exec, patch deployments, update deployments/scale, watch
+pods, configmaps, and list pods in `platformforge-observability`.
+
+Loopback ready checks returned HTTP 200 from Prometheus `/-/ready`, Loki
+`/ready`, and Tempo `/ready`.
+
+```
+$ make lint
+ruff check: All checks passed
+ruff format --check: passed
+
+$ make test
+351 passed, 66 skipped in 1.64s
+
+$ PLATFORMFORGE_MCP_LIVE=1 .venv/bin/pytest tests/integration/test_mcp_live.py -q
+2 passed in 0.69s
+```
+
+The live client was the reader token. `inventory-service` was ClusterIP with
+3 ready addresses. `inventory-service-v0-2-0` was 1 available of 1 desired,
+image `platformforge/inventory-service:0.2.0`, `immutable: false`.
+Mesh pods reported 2/2 ready, including the native `istio-proxy` sidecar.
+`pf-test-client-plain` reported 1/1. Namespace events in the retained window:
+0.
+
+Prometheus `istio_requests_total` for `inventory-service`, reporter `source`:
+
+```
+200  4269
+403  14
+500  112
+404  2
+503  2
+```
+
+Loki `{namespace="platformforge-dev",app="inventory-service"}` over 15 minutes
+returned 3 lines, all `container=istio-proxy` xdsproxy messages.
+`{namespace="platformforge-dev",container="inventory-service"}` returned 0 streams.
+Tempo `/api/search?limit=5` returned 0 traces. `query_tempo` of a 32-zero id
+returned telemetry missing. `investigate_incident` set `verified_root_cause`
+to null and labeled the 5xx samples as an unverified hypothesis.
+
+After the run, kind Deployments were still demo-web 2, inventory v0.1.0 2,
+inventory v0.2.0 1, orders 2, on the same image tags.
+
+### What M7.2 does not show
+
+- An MCP call against GKE.
+- A retained application log line or trace id that joins the HTTP 500 counter
+  to one request.
+- A digest-pinned image on kind. The running tags have no `@sha256`.
+
+## M7.3 GKE reader and live MCP tools
+
+Date: 2026-10-21. Current context before apply and after the checks:
+`gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev`.
+The apply used that `--context` and only `deploy/gke/mcp-reader.yaml`.
+The kind cluster was not contacted. No Deployment, VirtualService,
+AuthorizationPolicy, Terraform, or GitHub workflow was changed.
+Port-forwards bound `127.0.0.1` and were stopped afterward. The reader token
+was not committed.
+
+```
+$ kubectl --context gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev apply -f deploy/gke/mcp-reader.yaml
+serviceaccount/platformforge-mcp-reader created
+role.rbac.authorization.k8s.io/platformforge-mcp-reader created
+rolebinding.rbac.authorization.k8s.io/platformforge-mcp-reader created
+```
+
+`kubectl auth can-i` as that ServiceAccount returned yes for the approved
+reads in `platformforge-dev` and no for secrets, exec, patch, scale, delete,
+watch, and pod list in `platformforge-observability`, `kube-system`, and
+`istio-system`.
+
+Prometheus, Loki, and Tempo ready endpoints on loopback returned HTTP 200.
+
+```
+$ make lint
+ruff check: All checks passed
+ruff format --check: passed
+
+$ make test
+352 passed, 68 skipped in 1.69s
+
+$ PLATFORMFORGE_MCP_GKE=1 .venv/bin/pytest tests/integration/test_mcp_gke.py -q
+2 passed in 3.77s
+```
+
+The live client was the GKE reader token. `inventory-service` was ClusterIP
+with 3 ready addresses. The canary was 1/1 available and digest-pinned at
+`sha256:e995d076aa876ac8c8d1b854e9364256b83a52162a871c63bfefffb28778abe4`
+(`immutable: true`). Mesh pods were 2/2. Namespace events: 0.
+
+Prometheus `istio_requests_total` for `inventory-service`, reporter `source`:
+
+```
+200  457
+403  7
+500  26
+```
+
+Loki `{namespace="platformforge-dev",app="inventory-service"}` over 15 minutes
+returned 0 lines. The same window had two `istio-proxy` lines, for
+`orders-service` and `pf-test-client-mesh`. Tempo search returned 0 traces.
+`investigate_incident` left `verified_root_cause` null.
+
+After the run, inventory routing was still `v0-1-0=100` and `v0-2-0=0`.
+
+### What M7.3 does not show
+
+- A request id or trace id joined to the 26 retained HTTP 500 samples.
+- A GCP IAM change. The operator client minted the token.
+- Removal of the ServiceAccount. That delete was not run.
+
 ## What Milestone 3 evidence does not show
 
 - Anything on GKE, multi-node, or multi-cluster; only a single-node kind cluster.

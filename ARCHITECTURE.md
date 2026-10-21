@@ -150,9 +150,21 @@ below.
 `services/requirements.txt`, and builds both `linux/amd64` images.
 `permissions: contents: read`, actions pinned to commit SHAs, `persist-credentials: false`,
 no secrets, no cloud credentials, no cluster. Delivery is a separate manual
-workflow described in [docs/CI_CD.md](docs/CI_CD.md). Canary decisions live in
+workflow. GitHub OIDC for `MICHAELWlN/platformforge` is applied, and one
+`0.2.0` publish succeeded. That publish did not roll the cluster. See
+[docs/CI_CD.md](docs/CI_CD.md). Canary decisions live in
 `platformforge.delivery` and do not call the cluster
 ([docs/PROGRESSIVE_DELIVERY.md](docs/PROGRESSIVE_DELIVERY.md)).
+
+### Read-only MCP
+
+`python -m platformforge.mcp_server` is a stdio MCP server (`mcp` 2.3.0). It
+lists and reads allowlisted namespaces. Kind and GKE live checks each use
+their own `platformforge-mcp-reader` token. A GKE call without that token is
+rejected. It does not deploy, listen on a port, or start when the package is
+imported. See [docs/MCP_SERVER.md](docs/MCP_SERVER.md),
+[docs/MCP_LIVE_INTEGRATION.md](docs/MCP_LIVE_INTEGRATION.md), and
+[docs/MCP_GKE_INTEGRATION.md](docs/MCP_GKE_INTEGRATION.md).
 
 ## Milestone 3: implemented (Istio service mesh, local kind)
 
@@ -304,5 +316,5 @@ at 100/0. Kind remains the arm64 lab and was not modified. Details are in
 - GKE workload deployment through the CLI
 - Istio or the observability stack on GKE
 - CD (image publishing and deployment from CI)
-- Read-only MCP server for Kubernetes diagnostics
+- A GCP IAM role that narrows the operator identity used to mint the MCP token
 - Metric-based canary promotion or automated rollback (the signals exist; the controller does not)

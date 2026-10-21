@@ -8,7 +8,7 @@ SERVICES    := inventory-service orders-service
 GKE_CONTEXT ?= gke_platformforge-dev-mn2026_us-central1-a_platformforge-dev
 GKE_REGISTRY ?= us-central1-docker.pkg.dev/platformforge-dev-mn2026/platformforge
 
-.PHONY: lint test images kind-load images-gke images-gke-publish gke-preflight integration terraform-validate
+.PHONY: lint test images kind-load images-gke images-gke-publish gke-preflight integration mcp-live mcp-gke terraform-validate
 
 lint:
 	$(VENV)/bin/ruff check src services tests
@@ -48,6 +48,16 @@ gke-preflight:
 
 integration:
 	PLATFORMFORGE_IT_CONTEXT=kind-$(KIND_CLUSTER) $(VENV)/bin/pytest -m integration -v
+
+# Opt-in. Requires the kind reader ServiceAccount and loopback port-forwards.
+# Does not run the deployment integration suite.
+mcp-live:
+	PLATFORMFORGE_MCP_LIVE=1 $(VENV)/bin/pytest tests/integration/test_mcp_live.py -v
+
+# Opt-in. Requires the GKE reader ServiceAccount and loopback port-forwards.
+# Does not contact kind or change workloads.
+mcp-gke:
+	PLATFORMFORGE_MCP_GKE=1 $(VENV)/bin/pytest tests/integration/test_mcp_gke.py -v
 
 # Static checks only. Does not run terraform plan, apply, or destroy.
 terraform-validate:
